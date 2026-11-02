@@ -1,0 +1,109 @@
+{
+  "schema": 1,
+  "units": "m, rad",
+  "status": "Fixed torso and hip setup heights; public motion uses two pitch angles and one lateral angle.",
+  "floor_offset_m": 0.6477,
+  "setup_heights_m": {
+    "torso": 1.2319,
+    "hip": 0.508
+  },
+  "limits_status": "ALL operating limits, velocity and effort bounds below are provisional demonstration values, NOT hardware travel limits",
+  "joints": {
+    "frame_pitch": {
+      "parent": "base_link",
+      "child": "tilt_frame",
+      "type": "revolute",
+      "xyz_m": [
+        0,
+        0,
+        0
+      ],
+      "rpy_rad": [
+        0,
+        -0.0010031365,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "lower": -0.08,
+      "upper": 0.08,
+      "velocity": 0.05,
+      "effort": 500
+    },
+    "torso_lateral": {
+      "parent": "torso_setup",
+      "child": "torso_carriage",
+      "type": "prismatic",
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "lower": -0.05,
+      "upper": 0.05,
+      "velocity": 0.02,
+      "effort": 500,
+      "xyz_m": [
+        -0.2190507,
+        0.274828,
+        0.116675
+      ],
+      "rpy_rad": [
+        0,
+        0,
+        0
+      ]
+    },
+    "hip_lateral": {
+      "parent": "hip_setup",
+      "child": "hip_carriage",
+      "type": "prismatic",
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "lower": -0.05,
+      "upper": 0.05,
+      "velocity": 0.02,
+      "effort": 500,
+      "xyz_m": [
+        -0.2190507,
+        0.274828,
+        0.1135
+      ],
+      "rpy_rad": [
+        0,
+        0,
+        0
+      ]
+    },
+    "foot_pitch": {
+      "parent": "base_link",
+      "child": "foot_platform",
+      "type": "revolute",
+      "xyz_m": [
+        0,
+        0,
+        0
+      ],
+      "rpy_rad": [
+        0,
+        0,
+        0
+      ],
+      "axis": [
+        0,
+        1,
+        0
+      ],
+      "lower": -0.08,
+      "upper": 0.08,
+      "velocity": 0.05,
+      "effort": 500
+    }
+  }
+}

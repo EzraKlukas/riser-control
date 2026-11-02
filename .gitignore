@@ -1,0 +1,9 @@
+# Colcon outputs (root and nested workspaces).
+build/
+install/
+log/
+
+# Python caches.
+__pycache__/
+*.py[cod]
+.pytest_cache/

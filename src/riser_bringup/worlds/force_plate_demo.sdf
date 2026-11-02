@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<sdf version="1.8"><world name="riser_world">
+  <physics name="validated_step" type="ignored"><max_step_size>0.001</max_step_size><real_time_factor>1.2</real_time_factor></physics>
+  <scene><shadows>false</shadows></scene>
+  <gravity>0 0 -9.80665</gravity>
+  <plugin filename="ignition-gazebo-physics-system" name="ignition::gazebo::systems::Physics"/>
+  <plugin filename="ignition-gazebo-user-commands-system" name="ignition::gazebo::systems::UserCommands"/>
+  <plugin filename="ignition-gazebo-scene-broadcaster-system" name="ignition::gazebo::systems::SceneBroadcaster"><dynamic_pose_hertz>30</dynamic_pose_hertz><state_hertz>20</state_hertz></plugin>
+  <plugin filename="ignition-gazebo-forcetorque-system" name="ignition::gazebo::systems::ForceTorque"/>
+  <light name="sun" type="directional"><pose>0 0 10 0 0 0</pose><diffuse>.8 .8 .8 1</diffuse><specular>.2 .2 .2 1</specular><direction>-.5 -.2 -1</direction></light>
+  <model name="ground"><static>true</static><link name="ground"><collision name="ground"><geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry></collision><visual name="ground"><geometry><plane><normal>0 0 1</normal><size>20 20</size></plane></geometry></visual></link></model>
+<plugin filename="libriser_loading_fixture.so" name="riser_gazebo::LoadingFixture">
+<load><side>left</side><force>20 10 -100</force><offset>0.1 0.04 0</offset><torque>1 2 3</torque><start>3</start><duration>3</duration></load>
+<load><side>right</side><force>-15 5 -150</force><offset>-0.08 -0.03 0</offset><torque>-2 1 -4</torque><start>7</start><duration>3</duration></load>
+<load><side>left</side><force>0 0 -200</force><offset>0 0 0</offset><torque>0 0 0</torque><start>11</start><duration>10000</duration></load>
+<load><side>right</side><force>0 0 -300</force><offset>0 0 0</offset><torque>0 0 0</torque><start>11</start><duration>10000</duration></load>
+</plugin>
+</world></sdf>

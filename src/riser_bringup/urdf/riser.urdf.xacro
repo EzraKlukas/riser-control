@@ -1,0 +1,472 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="riser">
+  <!-- Launch arguments and configuration. -->
+  <!-- Literal geometry uses 8 significant digits; mass, inertia and limits use 10. -->
+
+  <xacro:arg name="backend" default="none" />
+  <xacro:arg name="kinematics_file" default="$(find riser_bringup)/urdf/model/kinematics.yaml" />
+  <xacro:arg name="dynamics_file" default="$(find riser_bringup)/urdf/model/dynamics.yaml" />
+  <xacro:arg name="geometry_file" default="$(find riser_bringup)/urdf/model/geometry.yaml" />
+  <xacro:arg name="controllers_file" default="$(find riser_bringup)/config/controllers.yaml" />
+  <xacro:arg name="command_mode" default="position" />
+  <xacro:arg
+      name="control_coordinates_file"
+      default="$(find riser_bringup)/config/control_coordinates.json" />
+  <xacro:arg name="force_plate_rate" default="500" />
+
+  <xacro:property name="k" value="${xacro.load_yaml('$(arg kinematics_file)')}" />
+  <xacro:property name="d" value="${xacro.load_yaml('$(arg dynamics_file)')}" />
+  <xacro:property name="g" value="${xacro.load_yaml('$(arg geometry_file)')}" />
+  <xacro:property
+      name="rd"
+      value="${xacro.load_yaml('$(find riser_bringup)/urdf/model/reduced_pitch.json')}" />
+  <xacro:property name="c" value="${xacro.load_yaml('$(arg control_coordinates_file)')}" />
+
+  <xacro:include filename="$(find riser_bringup)/urdf/backends.xacro" />
+
+  <!-- Robot links: base, backboard, setup hardware and carriages. -->
+
+  <link name="world" />
+
+  <link name="base_link">
+    <inertial>
+      <origin
+          xyz="${d['links']['base_link']['com_m'][0]} ${d['links']['base_link']['com_m'][1]} ${d['links']['base_link']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['base_link']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['base_link']['ixx']}"
+          ixy="${d['links']['base_link']['ixy']}"
+          ixz="${d['links']['base_link']['ixz']}"
+          iyy="${d['links']['base_link']['iyy']}"
+          iyz="${d['links']['base_link']['iyz']}"
+          izz="${d['links']['base_link']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['base_link'][0]['xyz_m'][0]} ${g['links']['base_link'][0]['xyz_m'][1]} ${g['links']['base_link'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['base_link'][0]['size_m'][0]} ${g['links']['base_link'][0]['size_m'][1]} ${g['links']['base_link'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="base_link0">
+        <color rgba="0.55 0.57 0.6 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin
+          xyz="${g['links']['base_link'][1]['xyz_m'][0]} ${g['links']['base_link'][1]['xyz_m'][1]} ${g['links']['base_link'][1]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['base_link'][1]['size_m'][0]} ${g['links']['base_link'][1]['size_m'][1]} ${g['links']['base_link'][1]['size_m'][2]}" />
+      </geometry>
+      <material name="base_link1">
+        <color rgba="0.55 0.57 0.6 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="tilt_frame">
+    <inertial>
+      <origin
+          xyz="${d['links']['tilt_frame']['com_m'][0]} ${d['links']['tilt_frame']['com_m'][1]} ${d['links']['tilt_frame']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['tilt_frame']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['tilt_frame']['ixx']}"
+          ixy="${d['links']['tilt_frame']['ixy']}"
+          ixz="${d['links']['tilt_frame']['ixz']}"
+          iyy="${d['links']['tilt_frame']['iyy']}"
+          iyz="${d['links']['tilt_frame']['iyz']}"
+          izz="${d['links']['tilt_frame']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['tilt_frame'][0]['xyz_m'][0]} ${g['links']['tilt_frame'][0]['xyz_m'][1]} ${g['links']['tilt_frame'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['tilt_frame'][0]['size_m'][0]} ${g['links']['tilt_frame'][0]['size_m'][1]} ${g['links']['tilt_frame'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="tilt_frame0">
+        <color rgba="0.16 0.55 0.32 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin
+          xyz="${g['links']['tilt_frame'][1]['xyz_m'][0]} ${g['links']['tilt_frame'][1]['xyz_m'][1]} ${g['links']['tilt_frame'][1]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['tilt_frame'][1]['size_m'][0]} ${g['links']['tilt_frame'][1]['size_m'][1]} ${g['links']['tilt_frame'][1]['size_m'][2]}" />
+      </geometry>
+      <material name="tilt_frame1">
+        <color rgba="0.16 0.55 0.32 1" />
+      </material>
+    </visual>
+    <visual>
+      <origin
+          xyz="${g['links']['tilt_frame'][2]['xyz_m'][0]} ${g['links']['tilt_frame'][2]['xyz_m'][1]} ${g['links']['tilt_frame'][2]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['tilt_frame'][2]['size_m'][0]} ${g['links']['tilt_frame'][2]['size_m'][1]} ${g['links']['tilt_frame'][2]['size_m'][2]}" />
+      </geometry>
+      <material name="tilt_frame2">
+        <color rgba="0.16 0.55 0.32 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="torso_setup">
+    <inertial>
+      <origin
+          xyz="${d['links']['torso_setup']['com_m'][0]} ${d['links']['torso_setup']['com_m'][1]} ${d['links']['torso_setup']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['torso_setup']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['torso_setup']['ixx']}"
+          ixy="${d['links']['torso_setup']['ixy']}"
+          ixz="${d['links']['torso_setup']['ixz']}"
+          iyy="${d['links']['torso_setup']['iyy']}"
+          iyz="${d['links']['torso_setup']['iyz']}"
+          izz="${d['links']['torso_setup']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['torso_setup'][0]['xyz_m'][0]} ${g['links']['torso_setup'][0]['xyz_m'][1]} ${g['links']['torso_setup'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['torso_setup'][0]['size_m'][0]} ${g['links']['torso_setup'][0]['size_m'][1]} ${g['links']['torso_setup'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="torso_setup0">
+        <color rgba="0.55 0.57 0.6 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="hip_setup">
+    <inertial>
+      <origin
+          xyz="${d['links']['hip_setup']['com_m'][0]} ${d['links']['hip_setup']['com_m'][1]} ${d['links']['hip_setup']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['hip_setup']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['hip_setup']['ixx']}"
+          ixy="${d['links']['hip_setup']['ixy']}"
+          ixz="${d['links']['hip_setup']['ixz']}"
+          iyy="${d['links']['hip_setup']['iyy']}"
+          iyz="${d['links']['hip_setup']['iyz']}"
+          izz="${d['links']['hip_setup']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['hip_setup'][0]['xyz_m'][0]} ${g['links']['hip_setup'][0]['xyz_m'][1]} ${g['links']['hip_setup'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['hip_setup'][0]['size_m'][0]} ${g['links']['hip_setup'][0]['size_m'][1]} ${g['links']['hip_setup'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="hip_setup0">
+        <color rgba="0.55 0.57 0.6 1" />
+      </material>
+    </visual>
+  </link>
+
+  <link name="foot_platform">
+    <inertial>
+      <origin xyz="0.079145927 1.611179e-08 -0.16556187" rpy="0 0 0" />
+      <mass value="42.42143643" />
+      <inertia
+          ixx="2.636420093"
+          iyy="1.476925642"
+          izz="3.306753885"
+          ixy="-6.743879951e-07"
+          ixz="0.1135199409"
+          iyz="2.317557673e-07" />
+    </inertial>
+  </link>
+
+  <link name="torso_carriage">
+    <inertial>
+      <origin
+          xyz="${d['links']['torso_carriage']['com_m'][0]} ${d['links']['torso_carriage']['com_m'][1]} ${d['links']['torso_carriage']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['torso_carriage']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['torso_carriage']['ixx']}"
+          ixy="${d['links']['torso_carriage']['ixy']}"
+          ixz="${d['links']['torso_carriage']['ixz']}"
+          iyy="${d['links']['torso_carriage']['iyy']}"
+          iyz="${d['links']['torso_carriage']['iyz']}"
+          izz="${d['links']['torso_carriage']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['torso_carriage'][0]['xyz_m'][0]} ${g['links']['torso_carriage'][0]['xyz_m'][1]} ${g['links']['torso_carriage'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['torso_carriage'][0]['size_m'][0]} ${g['links']['torso_carriage'][0]['size_m'][1]} ${g['links']['torso_carriage'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="torso_carriage0">
+        <color rgba="0.25 0.48 0.72 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+          xyz="${g['links']['torso_carriage'][0]['xyz_m'][0]} ${g['links']['torso_carriage'][0]['xyz_m'][1]} ${g['links']['torso_carriage'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['torso_carriage'][0]['size_m'][0]} ${g['links']['torso_carriage'][0]['size_m'][1]} ${g['links']['torso_carriage'][0]['size_m'][2]}" />
+      </geometry>
+    </collision>
+  </link>
+
+  <link name="hip_carriage">
+    <inertial>
+      <origin
+          xyz="${d['links']['hip_carriage']['com_m'][0]} ${d['links']['hip_carriage']['com_m'][1]} ${d['links']['hip_carriage']['com_m'][2]}"
+          rpy="0 0 0" />
+      <mass value="${d['links']['hip_carriage']['mass_kg']}" />
+      <inertia
+          ixx="${d['links']['hip_carriage']['ixx']}"
+          ixy="${d['links']['hip_carriage']['ixy']}"
+          ixz="${d['links']['hip_carriage']['ixz']}"
+          iyy="${d['links']['hip_carriage']['iyy']}"
+          iyz="${d['links']['hip_carriage']['iyz']}"
+          izz="${d['links']['hip_carriage']['izz']}" />
+    </inertial>
+    <visual>
+      <origin
+          xyz="${g['links']['hip_carriage'][0]['xyz_m'][0]} ${g['links']['hip_carriage'][0]['xyz_m'][1]} ${g['links']['hip_carriage'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['hip_carriage'][0]['size_m'][0]} ${g['links']['hip_carriage'][0]['size_m'][1]} ${g['links']['hip_carriage'][0]['size_m'][2]}" />
+      </geometry>
+      <material name="hip_carriage0">
+        <color rgba="0.25 0.48 0.72 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+          xyz="${g['links']['hip_carriage'][0]['xyz_m'][0]} ${g['links']['hip_carriage'][0]['xyz_m'][1]} ${g['links']['hip_carriage'][0]['xyz_m'][2]}"
+          rpy="0 0 0" />
+      <geometry>
+        <box size="${g['links']['hip_carriage'][0]['size_m'][0]} ${g['links']['hip_carriage'][0]['size_m'][1]} ${g['links']['hip_carriage'][0]['size_m'][2]}" />
+      </geometry>
+    </collision>
+  </link>
+
+  <!-- Kinematic tree and physical joint limits. -->
+
+  <joint name="world_anchor" type="fixed">
+    <parent link="world" />
+    <child link="base_link" />
+    <origin xyz="0 0 ${k['floor_offset_m']}" rpy="0 0 0" />
+  </joint>
+
+  <joint name="torso_height_setup" type="fixed">
+    <parent link="tilt_frame" />
+    <child link="torso_setup" />
+    <origin xyz="0 0 ${k['setup_heights_m']['torso']}" rpy="0 0 0" />
+  </joint>
+
+  <joint name="hip_height_setup" type="fixed">
+    <parent link="tilt_frame" />
+    <child link="hip_setup" />
+    <origin xyz="0 0 ${k['setup_heights_m']['hip']}" rpy="0 0 0" />
+  </joint>
+
+  <joint name="backboard_pitch" type="revolute">
+    <parent link="base_link" />
+    <child link="tilt_frame" />
+    <origin
+        xyz="${k['joints']['frame_pitch']['xyz_m'][0]} ${k['joints']['frame_pitch']['xyz_m'][1]} ${k['joints']['frame_pitch']['xyz_m'][2]}"
+        rpy="${k['joints']['frame_pitch']['rpy_rad'][0]} ${k['joints']['frame_pitch']['rpy_rad'][1]} ${k['joints']['frame_pitch']['rpy_rad'][2]}" />
+    <axis xyz="${k['joints']['frame_pitch']['axis'][0]} ${k['joints']['frame_pitch']['axis'][1]} ${k['joints']['frame_pitch']['axis'][2]}" />
+    <limit
+        lower="${k['joints']['frame_pitch']['lower']}"
+        upper="${k['joints']['frame_pitch']['upper']}"
+        effort="30617.30034"
+        velocity="${k['joints']['frame_pitch']['velocity']}" />
+    <dynamics
+        damping="${d['joints']['frame_pitch']['damping']}"
+        friction="${d['joints']['frame_pitch']['friction']}" />
+  </joint>
+
+  <joint name="torso_lateral" type="prismatic">
+    <parent link="torso_setup" />
+    <child link="torso_carriage" />
+    <origin
+        xyz="${k['joints']['torso_lateral']['xyz_m'][0]} ${k['joints']['torso_lateral']['xyz_m'][1]} ${k['joints']['torso_lateral']['xyz_m'][2]}"
+        rpy="${k['joints']['torso_lateral']['rpy_rad'][0]} ${k['joints']['torso_lateral']['rpy_rad'][1]} ${k['joints']['torso_lateral']['rpy_rad'][2]}" />
+    <axis xyz="${k['joints']['torso_lateral']['axis'][0]} ${k['joints']['torso_lateral']['axis'][1]} ${k['joints']['torso_lateral']['axis'][2]}" />
+    <limit
+        lower="${k['joints']['torso_lateral']['lower']}"
+        upper="${k['joints']['torso_lateral']['upper']}"
+        effort="${k['joints']['torso_lateral']['effort']}"
+        velocity="${k['joints']['torso_lateral']['velocity']}" />
+    <dynamics
+        damping="${d['joints']['torso_lateral']['damping']}"
+        friction="${d['joints']['torso_lateral']['friction']}" />
+  </joint>
+
+  <joint name="hip_lateral" type="prismatic">
+    <parent link="hip_setup" />
+    <child link="hip_carriage" />
+    <origin
+        xyz="${k['joints']['hip_lateral']['xyz_m'][0]} ${k['joints']['hip_lateral']['xyz_m'][1]} ${k['joints']['hip_lateral']['xyz_m'][2]}"
+        rpy="${k['joints']['hip_lateral']['rpy_rad'][0]} ${k['joints']['hip_lateral']['rpy_rad'][1]} ${k['joints']['hip_lateral']['rpy_rad'][2]}" />
+    <axis xyz="${k['joints']['hip_lateral']['axis'][0]} ${k['joints']['hip_lateral']['axis'][1]} ${k['joints']['hip_lateral']['axis'][2]}" />
+    <limit
+        lower="${k['joints']['hip_lateral']['lower']}"
+        upper="${k['joints']['hip_lateral']['upper']}"
+        effort="${k['joints']['hip_lateral']['effort']}"
+        velocity="${k['joints']['hip_lateral']['velocity']}" />
+    <dynamics
+        damping="${d['joints']['hip_lateral']['damping']}"
+        friction="${d['joints']['hip_lateral']['friction']}" />
+  </joint>
+
+  <joint name="foot_plate_pitch" type="revolute">
+    <parent link="base_link" />
+    <child link="foot_platform" />
+    <origin
+        xyz="${k['joints']['foot_pitch']['xyz_m'][0]} ${k['joints']['foot_pitch']['xyz_m'][1]} ${k['joints']['foot_pitch']['xyz_m'][2]}"
+        rpy="${k['joints']['foot_pitch']['rpy_rad'][0]} ${k['joints']['foot_pitch']['rpy_rad'][1]} ${k['joints']['foot_pitch']['rpy_rad'][2]}" />
+    <axis xyz="${k['joints']['foot_pitch']['axis'][0]} ${k['joints']['foot_pitch']['axis'][1]} ${k['joints']['foot_pitch']['axis'][2]}" />
+    <limit
+        lower="${k['joints']['foot_pitch']['lower']}"
+        upper="${k['joints']['foot_pitch']['upper']}"
+        effort="7399.680882"
+        velocity="${k['joints']['foot_pitch']['velocity']}" />
+    <dynamics
+        damping="${d['joints']['foot_pitch']['damping']}"
+        friction="${d['joints']['foot_pitch']['friction']}" />
+  </joint>
+
+  <!-- Public ML coordinate; small positive inertia keeps the URDF valid. -->
+
+  <link name="ml_coordinate">
+    <inertial>
+      <mass value="1e-06" />
+      <inertia ixx="1e-09" iyy="1e-09" izz="1e-09" ixy="0" ixz="0" iyz="0" />
+    </inertial>
+  </link>
+
+  <joint name="ml_angle" type="revolute">
+    <parent link="base_link" />
+    <child link="ml_coordinate" />
+    <origin xyz="0 0 0" rpy="0 0 0" />
+    <axis xyz="1 0 0" />
+    <limit lower="-0.03705919817" upper="0.03705919817" effort="500" velocity="0.0148304692" />
+    <dynamics damping="0.1" friction="0" />
+  </joint>
+
+  <!-- Independent force plates and timestamped reaction sensors. -->
+
+  <link name="left_force_plate">
+    <inertial>
+      <origin xyz="-0.00050466518 -6.2643716e-05 -0.052123509" rpy="0 0 0" />
+      <mass value="29.4327229" />
+      <inertia
+          ixx="0.1758393953"
+          iyy="0.5502346011"
+          izz="0.6694040908"
+          ixy="-0.0003327467174"
+          ixz="0.0001164321135"
+          iyz="1.445263227e-05" />
+    </inertial>
+    <visual name="left_force_plate_visual">
+      <origin xyz="0 0 -0.0508" rpy="0 0 0" />
+      <geometry>
+        <box size="0.499872 0.249936 0.1016" />
+      </geometry>
+      <material name="left_force_plate">
+        <color rgba="0.2 0.55 0.8 1" />
+      </material>
+    </visual>
+    <collision name="left_force_plate_collision">
+      <origin xyz="0 0 -0.0508" rpy="0 0 0" />
+      <geometry>
+        <box size="0.499872 0.249936 0.1016" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="left_force_plate_sensor_joint" type="fixed">
+    <parent link="foot_platform" />
+    <child link="left_force_plate" />
+    <origin xyz="0.1016 0.127 -0.08509" rpy="0 0 0" />
+  </joint>
+
+  <gazebo reference="left_force_plate_sensor_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+    <sensor name="left_force_plate_sensor" type="force_torque">
+      <always_on>true</always_on>
+      <update_rate>$(arg force_plate_rate)</update_rate>
+      <topic>/riser/force_plates/left/raw</topic>
+      <pose>0 0 0 0 0 0</pose>
+      <force_torque>
+        <frame>sensor</frame>
+        <measure_direction>parent_to_child</measure_direction>
+      </force_torque>
+    </sensor>
+  </gazebo>
+
+  <link name="right_force_plate">
+    <inertial>
+      <origin xyz="-0.00050466518 -6.2643716e-05 -0.052123509" rpy="0 0 0" />
+      <mass value="29.4327229" />
+      <inertia
+          ixx="0.1758393953"
+          iyy="0.5502346011"
+          izz="0.6694040908"
+          ixy="-0.0003327467174"
+          ixz="0.0001164321135"
+          iyz="1.445263227e-05" />
+    </inertial>
+    <visual name="right_force_plate_visual">
+      <origin xyz="0 0 -0.0508" rpy="0 0 0" />
+      <geometry>
+        <box size="0.499872 0.249936 0.1016" />
+      </geometry>
+      <material name="right_force_plate">
+        <color rgba="0.8 0.45 0.2 1" />
+      </material>
+    </visual>
+    <collision name="right_force_plate_collision">
+      <origin xyz="0 0 -0.0508" rpy="0 0 0" />
+      <geometry>
+        <box size="0.499872 0.249936 0.1016" />
+      </geometry>
+    </collision>
+  </link>
+
+  <joint name="right_force_plate_sensor_joint" type="fixed">
+    <parent link="foot_platform" />
+    <child link="right_force_plate" />
+    <origin xyz="0.1016 -0.127 -0.08509" rpy="0 0 0" />
+  </joint>
+
+  <gazebo reference="right_force_plate_sensor_joint">
+    <preserveFixedJoint>true</preserveFixedJoint>
+    <sensor name="right_force_plate_sensor" type="force_torque">
+      <always_on>true</always_on>
+      <update_rate>$(arg force_plate_rate)</update_rate>
+      <topic>/riser/force_plates/right/raw</topic>
+      <pose>0 0 0 0 0 0</pose>
+      <force_torque>
+        <frame>sensor</frame>
+        <measure_direction>parent_to_child</measure_direction>
+      </force_torque>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="world_anchor">
+    <preserveFixedJoint>true</preserveFixedJoint>
+  </gazebo>
+
+  <!-- Control interfaces and simulator plugins. -->
+
+  <xacro:riser_backend
+      backend="$(arg backend)"
+      controllers_file="$(arg controllers_file)"
+      command_mode="$(arg command_mode)" />
+</robot>

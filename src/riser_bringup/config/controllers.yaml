@@ -1,0 +1,20 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 1000
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+    riser_position_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    riser_velocity_controller:
+      type: forward_command_controller/ForwardCommandController
+riser_position_controller:
+  ros__parameters:
+    joints: [backboard_pitch, foot_plate_pitch, ml_angle]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    allow_partial_joints_goal: false
+
+riser_velocity_controller:
+  ros__parameters:
+    joints: [backboard_pitch, foot_plate_pitch, ml_angle]
+    interface_name: velocity

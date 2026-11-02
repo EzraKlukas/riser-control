@@ -1,0 +1,72 @@
+{
+  "units": "q: m/rad; s: relative actuator travel in m; geometry frame uses ROS (x,y,z) = (z,x,y)",
+  "joint_order": [
+    "frame_pitch",
+    "torso_lateral",
+    "hip_lateral",
+    "foot_pitch"
+  ],
+  "calibration_status": "No encoder, drive, homing, force scaling, backlash or gearbox calibration supplied",
+  "axes": {
+    "frame_pitch": {
+      "type": "slider_crank",
+      "angle_offset_rad": -0.001003136473,
+      "pivot_cad_m": [
+        0,
+        0,
+        0
+      ],
+      "body_point_cad_m": [
+        -0.0968248,
+        1.5,
+        -0.3582797
+      ],
+      "slider_reference_cad_m": [
+        -0.0968248,
+        1.421817203,
+        -1.256476
+      ],
+      "slider_axis_cad": [
+        0,
+        0,
+        -1
+      ],
+      "rod_length_m": 0.9000625,
+      "branch": 1
+    },
+    "torso_lateral": {
+      "type": "linear",
+      "ratio": -1.0
+    },
+    "hip_lateral": {
+      "type": "linear",
+      "ratio": -1.0
+    },
+    "foot_pitch": {
+      "type": "slider_crank",
+      "angle_offset_rad": 0.0,
+      "pivot_cad_m": [
+        0,
+        0,
+        0
+      ],
+      "body_point_cad_m": [
+        -6.35e-05,
+        -0.3168473522,
+        0.2727769062
+      ],
+      "slider_reference_cad_m": [
+        -6.35e-05,
+        -0.36021,
+        0.050175
+      ],
+      "slider_axis_cad": [
+        0,
+        0,
+        1
+      ],
+      "rod_length_m": 0.2267860839,
+      "branch": -1
+    }
+  }
+}

@@ -1,0 +1,5 @@
+<library path="riser_ethercat_boundary">
+  <class name="riser_hardware/EthercatBoundary" type="riser_hardware::EthercatBoundary" base_class_type="hardware_interface::SystemInterface">
+    <description>Selectable, fail-closed RISER EtherCAT boundary. No bus implementation or physical motion.</description>
+  </class>
+</library>

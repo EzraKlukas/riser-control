@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.16)
+project(riser_bringup)
+find_package(ament_cmake REQUIRED)
+install(DIRECTORY urdf config worlds launch scripts DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS scripts/physical_states.py scripts/force_plate_frames.py DESTINATION lib/${PROJECT_NAME})
+install(FILES scripts/actuator_mapping.py DESTINATION lib/${PROJECT_NAME})
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_xacro test/test_xacro.py)
+endif()
+ament_package()
+

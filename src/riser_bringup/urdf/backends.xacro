@@ -1,0 +1,77 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:macro name="public_angular_joint" params="name lower upper velocity mode">
+    <!-- Dictionary lookup rejects unsupported commands, including direct effort. -->
+    <xacro:property name="command_interfaces"
+        value="${dict(position='position', velocity='velocity')}" />
+    <joint name="${name}">
+      <param name="lower">${lower}</param>
+      <param name="upper">${upper}</param>
+      <param name="velocity_limit">${velocity}</param>
+      <command_interface name="${command_interfaces[mode]}">
+        <param name="initial_value">0.0</param>
+      </command_interface>
+      <state_interface name="position">
+        <param name="initial_value">0.0</param>
+      </state_interface>
+      <state_interface name="velocity" />
+      <state_interface name="effort" />
+    </joint>
+  </xacro:macro>
+
+  <xacro:macro name="pitch_parameters" params="prefix">
+    <param name="${prefix}_reduced_table">${' '.join(map(str,rd['axes'][prefix]['table_flat']))}</param>
+    <param name="${prefix}_pitch_kp">${c['direct_pitch'][prefix]['kp_Nm_rad']}</param>
+    <param name="${prefix}_pitch_kd">${c['direct_pitch'][prefix]['kd_Nm_s_rad']}</param>
+    <param name="${prefix}_pitch_max_torque">${c['direct_pitch'][prefix]['max_torque_Nm']}</param>
+  </xacro:macro>
+
+  <xacro:macro name="riser_backend" params="backend controllers_file command_mode">
+    <xacro:if value="${backend != 'none'}">
+      <ros2_control name="RiserSystem" type="system">
+        <hardware>
+          <plugin>${'mock_components/GenericSystem' if backend == 'mock' else ('riser_gazebo/AngularSystem' if backend == 'gazebo' else 'riser_hardware/EthercatBoundary')}</plugin>
+          <param name="physical_state_rate">${c['physical_state_rate_hz']}</param>
+          <param name="command_mode">${command_mode}</param>
+          <xacro:pitch_parameters prefix="top" />
+          <xacro:pitch_parameters prefix="bottom" />
+          <param name="torso_height">${c['ml']['height_m']['torso']}</param>
+          <param name="hip_height">${c['ml']['height_m']['hip']}</param>
+          <param name="servo_kp">${c['servo']['kp_N_m']}</param>
+          <param name="servo_kd">${c['servo']['kd_N_s_m']}</param>
+          <param name="servo_max_force">${c['servo']['max_force_N']}</param>
+        </hardware>
+        <xacro:public_angular_joint
+            name="backboard_pitch"
+            lower="${k['joints']['frame_pitch']['lower']}"
+            upper="${k['joints']['frame_pitch']['upper']}"
+            velocity="${k['joints']['frame_pitch']['velocity']}"
+            mode="${command_mode}" />
+        <xacro:public_angular_joint
+            name="foot_plate_pitch"
+            lower="${k['joints']['foot_pitch']['lower']}"
+            upper="${k['joints']['foot_pitch']['upper']}"
+            velocity="${k['joints']['foot_pitch']['velocity']}"
+            mode="${command_mode}" />
+        <xacro:public_angular_joint
+            name="ml_angle"
+            lower="${-c['ml']['limit_rad']}"
+            upper="${c['ml']['limit_rad']}"
+            velocity="${c['ml']['velocity_rad_s']}"
+            mode="${command_mode}" />
+      </ros2_control>
+    </xacro:if>
+    <xacro:if value="${backend == 'gazebo'}">
+      <gazebo>
+        <plugin
+            filename="gz_ros2_control-system"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+          <robot_param>robot_description</robot_param>
+          <robot_param_node>robot_state_publisher</robot_param_node>
+          <parameters>${controllers_file}</parameters>
+        </plugin>
+      </gazebo>
+    </xacro:if>
+  </xacro:macro>
+</robot>

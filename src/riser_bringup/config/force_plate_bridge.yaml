@@ -1,0 +1,16 @@
+- ros_topic_name: /riser/force_plates/left/raw
+  gz_topic_name: /riser/force_plates/left/raw
+  ros_type_name: geometry_msgs/msg/WrenchStamped
+  gz_type_name: ignition.msgs.Wrench
+  direction: GZ_TO_ROS
+  publisher_queue: 100
+  subscriber_queue: 100
+  lazy: false
+- ros_topic_name: /riser/force_plates/right/raw
+  gz_topic_name: /riser/force_plates/right/raw
+  ros_type_name: geometry_msgs/msg/WrenchStamped
+  gz_type_name: ignition.msgs.Wrench
+  direction: GZ_TO_ROS
+  publisher_queue: 100
+  subscriber_queue: 100
+  lazy: false

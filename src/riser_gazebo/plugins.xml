@@ -1,0 +1,5 @@
+<library path="riser_gazebo_system">
+  <class name="riser_gazebo/AngularSystem" type="riser_gazebo::AngularSystem" base_class_type="gz_ros2_control::GazeboSimSystemInterface">
+    <description>Three angular coordinates controlling four physical linear drives.</description>
+  </class>
+</library>
