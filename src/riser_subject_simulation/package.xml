@@ -6,7 +6,12 @@
   <description>Double wrench input ~live user input</description>
   <maintainer email="ezraklukas@gmail.com">ezraklukas</maintainer>
   <license>TODO: License declaration</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>ignition-gazebo6</depend>
+  <depend>ignition-plugin1</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros_gz_interfaces</exec_depend>
   <export>
-    <build_type>ament_python</build_type>
+    <build_type>ament_cmake</build_type>
   </export>
 </package>

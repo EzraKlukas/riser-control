@@ -21,12 +21,13 @@ class WrenchInput(Node):
             side.wrench.force.x, side.wrench.force.y, side.wrench.force.z = 1.0, 1.0, 1.0
             side.wrench.torque.x, side.wrench.torque.y, side.wrench.torque.z = 1.0, 1.0, 1.0
 
-        self.pub = self.create_publisher((EntityWrench, EntityWrench), "/subject_simulation/wrench_inputs", 10)
+        self.pub = self.create_publisher(EntityWrench, "/subject_simulation/wrench_input", 10)
         self.create_timer(.05, self.send)
 
     def send(self):
         msg_l, msg_r = copy.deepcopy(self.left), copy.deepcopy(self.right)
-        self.pub.publish((msg_l, msg_r))
+        self.pub.publish(msg_l)
+        self.pub.publish(msg_r)
 
 def main():
     parser = argparse.ArgumentParser() # currently don't even care actually.
@@ -40,3 +41,6 @@ def main():
 
     node.destroy_node()
     rclpy.shutdown()
+
+if __name__ == "__main__":
+    main()

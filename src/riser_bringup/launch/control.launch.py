@@ -24,7 +24,7 @@ def setup(context):
         share / "worlds/riser_world.sdf"
     )
     plot = LaunchConfiguration("plot").perform(context) == "true";
-    wrench_ui = LaunchConfiguration("wrench_ui").perform(context) == "true";
+    wrench_input = LaunchConfiguration("wrench_input").perform(context) == "true";
     sim = backend == "gazebo"
     controllers = str(share / "config/controllers.yaml")
     # having parsed command line inputs, we parse urdf, first conforming the xml to the inputs.
@@ -145,7 +145,7 @@ def setup(context):
                 executable='plotjuggler'
             )
         )
-    if wrench_ui:
+    if wrench_input:
         actions.append(Node(package="riser_subject_simulation", executable="simulation_wrench_input",
             arguments=["--tui"], parameters=[{"use_sim_time": True}], output="screen"))
     return actions
@@ -180,7 +180,7 @@ def generate_launch_description():
                 choices=["true", "false"]
             ),
             DeclareLaunchArgument(
-                "wrench_ui",
+                "wrench_input",
                 default_value="true",
                 choices=["true", "false"]
             ),

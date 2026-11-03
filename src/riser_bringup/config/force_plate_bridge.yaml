@@ -14,3 +14,8 @@
   publisher_queue: 100
   subscriber_queue: 100
   lazy: false
+- ros_topic_name: /subject_simulation/wrench_input
+  gz_topic_name: /riser/wrench_input
+  ros_type_name: ros_gz_interfaces/msg/EntityWrench
+  gz_type_name: ignition.msgs.EntityWrench
+  direction: ROS_TO_GZ
