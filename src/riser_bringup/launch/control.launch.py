@@ -52,8 +52,9 @@ def setup(context):
     ]
     if sim:
         gz = Path(get_package_share_directory("ros_gz_sim"))
-        plugin_dir = str(
-            Path(get_package_share_directory("riser_gazebo")).parents[1] / "lib"
+        plugin_dir = ":".join(
+            str(Path(get_package_share_directory(package)).parents[1] / "lib")
+            for package in ("riser_gazebo", "riser_subject_simulation")
         )
         actions += [
             SetEnvironmentVariable(
@@ -147,7 +148,7 @@ def setup(context):
         )
     if wrench_input:
         actions.append(Node(package="riser_subject_simulation", executable="simulation_wrench_input",
-            arguments=["--tui"], parameters=[{"use_sim_time": True}], output="screen"))
+            arguments=["--gui"], parameters=[{"use_sim_time": True}], output="screen"))
     return actions
 
 

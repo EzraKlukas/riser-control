@@ -31,6 +31,8 @@ void WorldWrench::PreUpdate(const sim::UpdateInfo &info,
 
   sim::Link(left_link_)
       .AddWorldWrench(ecm, left_wrench_.force_, left_wrench_.torque_);
+  sim::Link(right_link_)
+      .AddWorldWrench(ecm, right_wrench_.force_, right_wrench_.torque_);
 }
 
 static Wrench msg_to_wrench(const ignition::msgs::EntityWrench &msg) {
@@ -38,9 +40,9 @@ static Wrench msg_to_wrench(const ignition::msgs::EntityWrench &msg) {
   wrench_.force_ = ignition::math::Vector3d(msg.wrench().force().x(),
                                             msg.wrench().force().y(),
                                             msg.wrench().force().z());
-  wrench_.torque_ = ignition::math::Vector3d(msg.wrench().force().x(),
-                                             msg.wrench().force().y(),
-                                             msg.wrench().force().z());
+  wrench_.torque_ = ignition::math::Vector3d(msg.wrench().torque().x(),
+                                             msg.wrench().torque().y(),
+                                             msg.wrench().torque().z());
   return wrench_;
 }
 
@@ -66,7 +68,7 @@ void WorldWrench::resolve_target_link(sim::EntityComponentManager &ecm) {
     left_link_ = ecm.EntityByComponents(
         sim::components::Link(), sim::components::Name("left_force_plate"),
         sim::components::ParentEntity(model));
-    left_link_ = ecm.EntityByComponents(
+    right_link_ = ecm.EntityByComponents(
         sim::components::Link(), sim::components::Name("right_force_plate"),
         sim::components::ParentEntity(model));
   }
