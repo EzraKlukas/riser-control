@@ -17,165 +17,235 @@
 #include <vector>
 
 namespace riser_gazebo {
-using Ret = hardware_interface::return_type;
+using ReturnType = hardware_interface::return_type;
+
+// Loaded by gz_ros2_control through pluginlib, rather than directly by Gazebo.
+// That wrapper reads state/updates controllers in PostUpdate and calls write in
+// PreUpdate. This class implements hardware callbacks, not Gazebo update hooks.
 class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   sim::EntityComponentManager *ecm_ = nullptr;
-  std::array<std::string, 3> names_{
+  // Public interfaces use radians. Only ML couples two physical joints.
+  std::array<std::string, 3> public_joint_names_{
       {"backboard_pitch", "foot_plate_pitch", "ml_angle"}};
-  std::array<std::string, 4> physical_{
+  // Physical indices: 0/1 are revolute pitch joints; 2/3 are prismatic slides.
+  std::array<std::string, 4> physical_joint_names_{
       {"backboard_pitch", "foot_plate_pitch", "torso_lateral", "hip_lateral"}};
-  std::array<sim::Entity, 4> joints_{};
-  std::array<double, 3> q_{}, v_{}, effort_{}, cmd_{}, ref_{}, ref_v_{};
-  std::array<double, 3> lower_{}, upper_{}, vmax_{};
-  std::array<double, 4> motor_force_{};
-  std::array<double, 2> heights_{};
+  std::array<sim::Entity, 4> physical_joints_{};
+  // Exported interfaces hold pointers into these arrays. Controllers write
+  // command_; write() converts it into references and then physical efforts.
+  std::array<double, 3> position_{}, velocity_{}, effort_{}, command_{},
+      reference_position_{}, reference_velocity_{};
+  std::array<double, 3> position_lower_limits_{}, position_upper_limits_{},
+      velocity_limits_{};
+  std::array<double, 4>
+      drive_effort_{}; // Pitch torques [N m], slide forces [N].
+  std::array<double, 2> ml_heights_{};
   sensor_msgs::msg::JointState physical_msg_;
-  int64_t last_publish_ns_ = -1;
-  double state_rate_ = 100;
+  int64_t last_state_publish_ns_ = -1;
+  double physical_state_rate_hz_ = 100;
   static constexpr size_t physical_count_ = 4;
-  double kp_ = 0, kd_ = 0, max_force_ = 0;
+  double lateral_kp_ = 0, lateral_kd_ = 0, lateral_force_limit_ = 0;
   // Table columns: angle, inertia, inertia derivative, gravity torque, damping.
   struct ReducedSample {
-    double q, m, dm, g, d;
+    double angle, inertia, inertia_derivative, gravity_torque, damping;
   };
-  std::array<std::vector<ReducedSample>, 2> reduced_;
-  std::array<double, 2> pitch_kp_{}, pitch_kd_{}, pitch_max_{},
-      previous_pitch_v_{};
+  std::array<std::vector<ReducedSample>, 2> reduced_pitch_tables_;
+  std::array<double, 2> pitch_kp_{}, pitch_kd_{}, pitch_torque_limits_{},
+      previous_pitch_velocity_{};
   bool previous_pitch_velocity_valid_ = false;
-  ReducedSample reduced_at(size_t i, double q) const {
-    const auto &t = reduced_[i];
-    const double step = t[1].q - t[0].q;
-    const double index =
-        std::clamp((q - t.front().q) / step, 0., double(t.size() - 1));
-    const size_t j = std::min(size_t(index), t.size() - 2);
-    const double f = index - j;
-    const auto &a = t[j];
-    const auto &b = t[j + 1];
-    return {q, a.m + f * (b.m - a.m), a.dm + f * (b.dm - a.dm),
-            a.g + f * (b.g - a.g), a.d + f * (b.d - a.d)};
+
+  // Tables are validated as uniformly spaced during initSim. Clamp to the
+  // table domain and linearly interpolate each reduced-dynamics coefficient.
+  ReducedSample interpolate_pitch_dynamics(size_t axis_index,
+                                           double angle) const {
+    const auto &table = reduced_pitch_tables_[axis_index];
+    const double step = table[1].angle - table[0].angle;
+    const double index = std::clamp((angle - table.front().angle) / step, 0.,
+                                    double(table.size() - 1));
+    const size_t sample_index = std::min(size_t(index), table.size() - 2);
+    const double fraction = index - sample_index;
+    const auto &left = table[sample_index];
+    const auto &right = table[sample_index + 1];
+    return {angle, left.inertia + fraction * (right.inertia - left.inertia),
+            left.inertia_derivative +
+                fraction * (right.inertia_derivative - left.inertia_derivative),
+            left.gravity_torque +
+                fraction * (right.gravity_torque - left.gravity_torque),
+            left.damping + fraction * (right.damping - left.damping)};
   }
-  void apply_direct(double dt) {
-    for (size_t i = 0; i < 2; ++i) {
-      const double q = state(i), v = state(i, true);
-      if (!std::isfinite(q) || !std::isfinite(v))
+  // Add the effects of the pitch stages/rods omitted from the Gazebo model.
+  // The actuator servo effort was already clamped; these passive terms are
+  // added afterward, including while the hardware component is inactive.
+  void apply_pitch_efforts(double step_seconds) {
+    for (size_t axis_index = 0; axis_index < 2; ++axis_index) {
+      const double angle = joint_state(axis_index),
+                   angular_velocity = joint_state(axis_index, true);
+      if (!std::isfinite(angle) || !std::isfinite(angular_velocity))
         throw std::domain_error("Nonfinite direct pitch state");
       const double acceleration =
-          previous_pitch_velocity_valid_ ? (v - previous_pitch_v_[i]) / dt : 0.;
-      const auto r = reduced_at(i, q);
+          previous_pitch_velocity_valid_
+              ? (angular_velocity - previous_pitch_velocity_[axis_index]) /
+                    step_seconds
+              : 0.;
+      const auto sample = interpolate_pitch_dynamics(axis_index, angle);
       // M(q) qdd + 1/2 M'(q) qd^2 + D(q) qd - Qg(q): the
       // complete planar contribution of the removed audited stage and rod.
       // Acceleration feedback is delayed by one physics step. This numerical
       // approximation is quantified in the historical runtime validation.
-      force(i, motor_force_[i] - r.m * acceleration - .5 * r.dm * v * v -
-                   r.d * v + r.g);
-      previous_pitch_v_[i] = v;
+      set_joint_effort(axis_index, drive_effort_[axis_index] -
+                                       sample.inertia * acceleration -
+                                       .5 * sample.inertia_derivative *
+                                           angular_velocity * angular_velocity -
+                                       sample.damping * angular_velocity +
+                                       sample.gravity_torque);
+      previous_pitch_velocity_[axis_index] = angular_velocity;
     }
     previous_pitch_velocity_valid_ = true;
   }
-  bool ready_ = false, active_ = false;
+  bool state_ready_ = false, active_ = false;
   int64_t last_write_ns_ = -1;
-  std::string mode_ = "position";
+  std::string command_mode_ = "position";
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
-  double number(const hardware_interface::HardwareInfo &h,
-                const std::string &s) {
-    return std::stod(h.hardware_parameters.at(s));
+  double
+  hardware_parameter(const hardware_interface::HardwareInfo &hardware_info,
+                     const std::string &parameter_name) {
+    return std::stod(hardware_info.hardware_parameters.at(parameter_name));
   }
-  double state(size_t i, bool vel = false) const {
-    if (vel) {
-      auto c = ecm_->Component<sim::components::JointVelocity>(joints_[i]);
-      if (!c || c->Data().empty())
+  // Read Gazebo's first DOF; all four physical joints have one DOF.
+  double joint_state(size_t axis_index, bool read_velocity = false) const {
+    if (read_velocity) {
+      auto component = ecm_->Component<sim::components::JointVelocity>(
+          physical_joints_[axis_index]);
+      if (!component || component->Data().empty())
         throw std::runtime_error("Missing joint velocity");
-      return c->Data()[0];
+      return component->Data()[0];
     }
-    auto c = ecm_->Component<sim::components::JointPosition>(joints_[i]);
-    if (!c || c->Data().empty())
+    auto component = ecm_->Component<sim::components::JointPosition>(
+        physical_joints_[axis_index]);
+    if (!component || component->Data().empty())
       throw std::runtime_error("Missing joint position");
-    return c->Data()[0];
+    return component->Data()[0];
   }
-  void force(size_t joint, double f) {
-    auto c = ecm_->Component<sim::components::JointForceCmd>(joints_[joint]);
-    if (c)
-      c->Data() = {f};
+  // JointForceCmd means torque for a revolute joint, force for a prismatic one.
+  // Physics integrates this effort; no position or velocity is reset here.
+  void set_joint_effort(size_t joint, double effort) {
+    auto component = ecm_->Component<sim::components::JointForceCmd>(
+        physical_joints_[joint]);
+    if (component)
+      component->Data() = {effort};
     else
-      ecm_->CreateComponent(joints_[joint],
-                            sim::components::JointForceCmd({f}));
+      ecm_->CreateComponent(physical_joints_[joint],
+                            sim::components::JointForceCmd({effort}));
   }
-  void zero_motors() {
-    for (size_t i = 0; i < physical_count_; ++i)
-      force(i, 0);
-    motor_force_.fill(0);
+  void zero_drive_efforts() {
+    for (size_t axis_index = 0; axis_index < physical_count_; ++axis_index)
+      set_joint_effort(axis_index, 0);
+    drive_effort_.fill(0);
   }
 
 public:
   bool initSim(rclcpp::Node::SharedPtr &node,
-               std::map<std::string, sim::Entity> &joints,
-               const hardware_interface::HardwareInfo &info,
+               std::map<std::string, sim::Entity> &gazebo_joints,
+               const hardware_interface::HardwareInfo &hardware_info,
                sim::EntityComponentManager &ecm, int &) override {
-    if (hardware_interface::SystemInterface::on_init(info) !=
+    if (hardware_interface::SystemInterface::on_init(hardware_info) !=
         hardware_interface::CallbackReturn::SUCCESS)
       return false;
     nh_ = node;
     ecm_ = &ecm;
     try {
-      mode_ = info.hardware_parameters.at("command_mode");
-      if (mode_ != "position" && mode_ != "velocity")
+      command_mode_ = hardware_info.hardware_parameters.at("command_mode");
+      if (command_mode_ != "position" && command_mode_ != "velocity")
         throw std::runtime_error("Unsupported command mode");
-      for (size_t i = 0; i < physical_count_; ++i) {
-        joints_[i] = joints.at(physical_[i]);
-        if (!ecm.Component<sim::components::JointPosition>(joints_[i]))
-          ecm.CreateComponent(joints_[i], sim::components::JointPosition());
-        if (!ecm.Component<sim::components::JointVelocity>(joints_[i]))
-          ecm.CreateComponent(joints_[i], sim::components::JointVelocity());
+      // Resolve all four physical Gazebo joints, including the two slides
+      // that are not exported as individually commandable public joints.
+      for (size_t axis_index = 0; axis_index < physical_count_; ++axis_index) {
+        physical_joints_[axis_index] =
+            gazebo_joints.at(physical_joint_names_[axis_index]);
+        if (!ecm.Component<sim::components::JointPosition>(
+                physical_joints_[axis_index]))
+          ecm.CreateComponent(physical_joints_[axis_index],
+                              sim::components::JointPosition());
+        if (!ecm.Component<sim::components::JointVelocity>(
+                physical_joints_[axis_index]))
+          ecm.CreateComponent(physical_joints_[axis_index],
+                              sim::components::JointVelocity());
       }
-      for (size_t i = 0; i < 2; ++i) {
-        const std::string p = i == 0 ? "top_" : "bottom_";
-        std::istringstream in(info.hardware_parameters.at(p + "reduced_table"));
-        ReducedSample r;
-        while (in >> r.q >> r.m >> r.dm >> r.g >> r.d) {
-          if (!std::isfinite(r.q) || !std::isfinite(r.m) ||
-              !std::isfinite(r.dm) || !std::isfinite(r.g) ||
-              !std::isfinite(r.d) || r.m < 0 || r.d < 0)
+      // Pitch stages are represented by dynamics tables, not linear joints.
+      for (size_t axis_index = 0; axis_index < 2; ++axis_index) {
+        const std::string prefix = axis_index == 0 ? "top_" : "bottom_";
+        std::istringstream table_stream(
+            hardware_info.hardware_parameters.at(prefix + "reduced_table"));
+        ReducedSample sample;
+        while (table_stream >> sample.angle >> sample.inertia >>
+               sample.inertia_derivative >> sample.gravity_torque >>
+               sample.damping) {
+          if (!std::isfinite(sample.angle) || !std::isfinite(sample.inertia) ||
+              !std::isfinite(sample.inertia_derivative) ||
+              !std::isfinite(sample.gravity_torque) ||
+              !std::isfinite(sample.damping) || sample.inertia < 0 ||
+              sample.damping < 0)
             throw std::runtime_error("Invalid reduced dynamics");
-          reduced_[i].push_back(r);
+          reduced_pitch_tables_[axis_index].push_back(sample);
         }
-        const auto &t = reduced_[i];
-        if (!in.eof() || t.size() < 2)
+        const auto &table = reduced_pitch_tables_[axis_index];
+        if (!table_stream.eof() || table.size() < 2)
           throw std::runtime_error("Malformed reduced dynamics table");
-        const double step = t[1].q - t[0].q;
+        const double step = table[1].angle - table[0].angle;
         if (step <= 0)
           throw std::runtime_error("Invalid reduced dynamics grid");
-        for (size_t j = 1; j < t.size(); ++j)
-          if (std::abs(t[j].q - t[j - 1].q - step) > 1e-10)
+        for (size_t sample_index = 1; sample_index < table.size();
+             ++sample_index)
+          if (std::abs(table[sample_index].angle -
+                       table[sample_index - 1].angle - step) > 1e-10)
             throw std::runtime_error("Nonuniform reduced dynamics grid");
-        pitch_kp_[i] = number(info, p + "pitch_kp");
-        pitch_kd_[i] = number(info, p + "pitch_kd");
-        pitch_max_[i] = number(info, p + "pitch_max_torque");
-        if (!std::isfinite(pitch_kp_[i]) || !std::isfinite(pitch_kd_[i]) ||
-            !std::isfinite(pitch_max_[i]) || pitch_kp_[i] <= 0 ||
-            pitch_kd_[i] < 0 || pitch_max_[i] <= 0)
+        pitch_kp_[axis_index] =
+            hardware_parameter(hardware_info, prefix + "pitch_kp");
+        pitch_kd_[axis_index] =
+            hardware_parameter(hardware_info, prefix + "pitch_kd");
+        pitch_torque_limits_[axis_index] =
+            hardware_parameter(hardware_info, prefix + "pitch_max_torque");
+        if (!std::isfinite(pitch_kp_[axis_index]) ||
+            !std::isfinite(pitch_kd_[axis_index]) ||
+            !std::isfinite(pitch_torque_limits_[axis_index]) ||
+            pitch_kp_[axis_index] <= 0 || pitch_kd_[axis_index] < 0 ||
+            pitch_torque_limits_[axis_index] <= 0)
           throw std::runtime_error("Invalid angular servo gains");
       }
-      heights_ = {number(info, "torso_height"), number(info, "hip_height")};
-      kp_ = number(info, "servo_kp");
-      kd_ = number(info, "servo_kd");
-      max_force_ = number(info, "servo_max_force");
-      if (info.joints.size() != 3)
+      ml_heights_ = {hardware_parameter(hardware_info, "torso_height"),
+                     hardware_parameter(hardware_info, "hip_height")};
+      lateral_kp_ = hardware_parameter(hardware_info, "servo_kp");
+      lateral_kd_ = hardware_parameter(hardware_info, "servo_kd");
+      lateral_force_limit_ =
+          hardware_parameter(hardware_info, "servo_max_force");
+      // Public angular limits and slide servo settings come from the Xacro.
+      if (hardware_info.joints.size() != 3)
         throw std::runtime_error("Exactly three public joints required");
-      for (size_t i = 0; i < 3; ++i) {
-        auto j =
-            std::find_if(info.joints.begin(), info.joints.end(),
-                         [&](const auto &j) { return j.name == names_[i]; });
-        if (j == info.joints.end())
+      for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
+        auto joint =
+            std::find_if(hardware_info.joints.begin(),
+                         hardware_info.joints.end(), [&](const auto &joint) {
+                           return joint.name == public_joint_names_[axis_index];
+                         });
+        if (joint == hardware_info.joints.end())
           throw std::runtime_error("Missing public joint");
-        lower_[i] = std::stod(j->parameters.at("lower"));
-        upper_[i] = std::stod(j->parameters.at("upper"));
-        vmax_[i] = std::stod(j->parameters.at("velocity_limit"));
+        position_lower_limits_[axis_index] =
+            std::stod(joint->parameters.at("lower"));
+        position_upper_limits_[axis_index] =
+            std::stod(joint->parameters.at("upper"));
+        velocity_limits_[axis_index] =
+            std::stod(joint->parameters.at("velocity_limit"));
       }
-      state_rate_ = number(info, "physical_state_rate");
-      if (!std::isfinite(state_rate_) || state_rate_ <= 0)
+      physical_state_rate_hz_ =
+          hardware_parameter(hardware_info, "physical_state_rate");
+      if (!std::isfinite(physical_state_rate_hz_) ||
+          physical_state_rate_hz_ <= 0)
         throw std::runtime_error("Invalid physical state rate");
-      physical_msg_.name.assign(physical_.begin(),
-                                physical_.begin() + physical_count_);
+      // Publish physical joint states separately for TF/inspection. Publishing
+      // a state here does not export a ros2_control resource interface for it.
+      physical_msg_.name.assign(physical_joint_names_.begin(),
+                                physical_joint_names_.begin() +
+                                    physical_count_);
       physical_msg_.name.push_back("ml_angle");
       physical_msg_.position.resize(physical_count_ + 1);
       physical_msg_.velocity.resize(physical_count_ + 1);
@@ -187,138 +257,190 @@ public:
     }
     return true;
   }
+  // Each handle exposes the storage itself, not a copy of its current value.
   std::vector<hardware_interface::StateInterface>
   export_state_interfaces() override {
-    std::vector<hardware_interface::StateInterface> out;
-    for (size_t i = 0; i < 3; ++i) {
-      out.emplace_back(names_[i], "position", &q_[i]);
-      out.emplace_back(names_[i], "velocity", &v_[i]);
-      out.emplace_back(names_[i], "effort", &effort_[i]);
+    std::vector<hardware_interface::StateInterface> interfaces;
+    for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
+      interfaces.emplace_back(public_joint_names_[axis_index], "position",
+                              &position_[axis_index]);
+      interfaces.emplace_back(public_joint_names_[axis_index], "velocity",
+                              &velocity_[axis_index]);
+      interfaces.emplace_back(public_joint_names_[axis_index], "effort",
+                              &effort_[axis_index]);
     }
-    return out;
+    return interfaces;
   }
+  // Exactly one command type per public joint, selected at initialization.
   std::vector<hardware_interface::CommandInterface>
   export_command_interfaces() override {
-    std::vector<hardware_interface::CommandInterface> out;
-    for (size_t i = 0; i < 3; ++i)
-      out.emplace_back(names_[i], mode_, &cmd_[i]);
-    return out;
+    std::vector<hardware_interface::CommandInterface> interfaces;
+    for (size_t axis_index = 0; axis_index < 3; ++axis_index)
+      interfaces.emplace_back(public_joint_names_[axis_index], command_mode_,
+                              &command_[axis_index]);
+    return interfaces;
   }
   hardware_interface::CallbackReturn
   on_activate(const rclcpp_lifecycle::State &) override {
+    // Hardware activation seeds position references from the last read.
     active_ = true;
-    ref_ = q_;
-    ref_v_.fill(0);
-    cmd_ = mode_ == "position" ? q_ : std::array<double, 3>{};
+    reference_position_ = position_;
+    reference_velocity_.fill(0);
+    command_ =
+        command_mode_ == "position" ? position_ : std::array<double, 3>{};
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   hardware_interface::CallbackReturn
   on_deactivate(const rclcpp_lifecycle::State &) override {
     active_ = false;
-    zero_motors();
+    zero_drive_efforts();
     return hardware_interface::CallbackReturn::SUCCESS;
   }
-  Ret read(const rclcpp::Time &now, const rclcpp::Duration &) override {
+  ReturnType read(const rclcpp::Time &now, const rclcpp::Duration &) override {
     try {
-      q_[0] = state(0);
-      q_[1] = state(1);
-      v_[0] = state(0, true);
-      v_[1] = state(1, true);
-      double ht = heights_[0], hh = heights_[1], h2 = ht * ht + hh * hh,
-             t = (ht * state(2) + hh * state(3)) / h2;
-      q_[2] = std::atan(t);
-      v_[2] = (ht * state(2, true) + hh * state(3, true)) / (h2 * (1 + t * t));
-      effort_[0] = motor_force_[0];
-      effort_[1] = motor_force_[1];
-      effort_[2] = (1 + t * t) * (ht * motor_force_[2] + hh * motor_force_[3]);
-      if (last_publish_ns_ < 0 ||
-          now.nanoseconds() - last_publish_ns_ >= 1e9 / state_rate_) {
+      position_[0] = joint_state(0);
+      position_[1] = joint_state(1);
+      velocity_[0] = joint_state(0, true);
+      velocity_[1] = joint_state(1, true);
+      // Least-squares fit of y_i = h_i * tan(ML). This still produces an angle
+      // when the slides disagree; it does not detect or correct that mismatch.
+      double torso_height = ml_heights_[0], hip_height = ml_heights_[1],
+             height_squared_sum =
+                 torso_height * torso_height + hip_height * hip_height,
+             ml_tangent =
+                 (torso_height * joint_state(2) + hip_height * joint_state(3)) /
+                 height_squared_sum;
+      position_[2] = std::atan(ml_tangent);
+      velocity_[2] = (torso_height * joint_state(2, true) +
+                      hip_height * joint_state(3, true)) /
+                     (height_squared_sum * (1 + ml_tangent * ml_tangent));
+      // Report the previous commanded drive efforts, not measured joint loads.
+      // ML torque follows virtual work: tau = sum(h_i * sec(ML)^2 * F_i).
+      effort_[0] = drive_effort_[0];
+      effort_[1] = drive_effort_[1];
+      effort_[2] =
+          (1 + ml_tangent * ml_tangent) *
+          (torso_height * drive_effort_[2] + hip_height * drive_effort_[3]);
+      if (last_state_publish_ns_ < 0 ||
+          now.nanoseconds() - last_state_publish_ns_ >=
+              1e9 / physical_state_rate_hz_) {
         physical_msg_.header.stamp = now;
-        for (size_t i = 0; i < physical_count_; ++i) {
-          physical_msg_.position[i] = state(i);
-          physical_msg_.velocity[i] = state(i, true);
+        for (size_t axis_index = 0; axis_index < physical_count_;
+             ++axis_index) {
+          physical_msg_.position[axis_index] = joint_state(axis_index);
+          physical_msg_.velocity[axis_index] = joint_state(axis_index, true);
         }
-        physical_msg_.position[physical_count_] = q_[2];
-        physical_msg_.velocity[physical_count_] = v_[2];
+        physical_msg_.position[physical_count_] = position_[2];
+        physical_msg_.velocity[physical_count_] = velocity_[2];
         state_pub_->publish(physical_msg_);
-        last_publish_ns_ = now.nanoseconds();
+        last_state_publish_ns_ = now.nanoseconds();
       }
-      ready_ = true;
+      state_ready_ = true;
     } catch (const std::exception &ex) {
-      if (ready_) {
+      if (state_ready_) {
+        // Empty components are tolerated only until the first successful read.
         RCLCPP_ERROR(nh_->get_logger(), "RISER read: %s", ex.what());
-        zero_motors();
-        return Ret::ERROR;
+        zero_drive_efforts();
+        return ReturnType::ERROR;
       }
-      return Ret::OK;
+      return ReturnType::OK;
     }
-    return Ret::OK;
+    return ReturnType::OK;
   }
-  Ret write(const rclcpp::Time &now, const rclcpp::Duration &) override {
+  ReturnType write(const rclcpp::Time &now, const rclcpp::Duration &) override {
     // gz_ros2_control passes time since its last controller update, not since
     // its previous physics-step write. Integrate only the actual write delta.
-    const auto ns = now.nanoseconds();
-    if (last_write_ns_ >= 0 && ns < last_write_ns_)
+    const auto write_time_ns = now.nanoseconds();
+    if (last_write_ns_ >= 0 && write_time_ns < last_write_ns_)
       previous_pitch_velocity_valid_ = false;
-    double dt =
-        last_write_ns_ < 0 ? 0. : std::max(0., (ns - last_write_ns_) * 1e-9);
-    last_write_ns_ = ns;
-    if (!ready_) {
-      zero_motors();
-      return Ret::OK;
+    double step_seconds =
+        last_write_ns_ < 0
+            ? 0.
+            : std::max(0., (write_time_ns - last_write_ns_) * 1e-9);
+    last_write_ns_ = write_time_ns;
+    if (!state_ready_) {
+      zero_drive_efforts();
+      return ReturnType::OK;
     }
     if (!active_) {
-      zero_motors();
+      // Disable servo effort but retain the removed bodies' passive dynamics.
+      zero_drive_efforts();
       try {
-        if (dt > 0)
-          apply_direct(dt);
+        if (step_seconds > 0)
+          apply_pitch_efforts(step_seconds);
       } catch (const std::exception &ex) {
         RCLCPP_ERROR(nh_->get_logger(), "RISER passive dynamics: %s",
                      ex.what());
-        return Ret::ERROR;
+        return ReturnType::ERROR;
       }
-      return Ret::OK;
+      return ReturnType::OK;
     }
     try {
-      if (dt <= 0)
-        return Ret::OK;
-      for (size_t i = 0; i < 3; ++i) {
-        if (!std::isfinite(cmd_[i]))
+      if (step_seconds <= 0)
+        return ReturnType::OK;
+      // 1. Position commands are absolute targets. Velocity commands integrate
+      // bounded references; reaching an angular limit zeros reference velocity.
+      for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
+        if (!std::isfinite(command_[axis_index]))
           throw std::domain_error("Nonfinite command");
-        if (mode_ == "position") {
-          if (cmd_[i] < lower_[i] || cmd_[i] > upper_[i])
+        if (command_mode_ == "position") {
+          if (command_[axis_index] < position_lower_limits_[axis_index] ||
+              command_[axis_index] > position_upper_limits_[axis_index])
             throw std::domain_error("Angular target outside bounds");
-          ref_[i] = cmd_[i];
-          ref_v_[i] = 0;
+          reference_position_[axis_index] = command_[axis_index];
+          reference_velocity_[axis_index] = 0;
         } else {
-          ref_v_[i] = std::clamp(cmd_[i], -vmax_[i], vmax_[i]);
-          ref_[i] = std::clamp(ref_[i] + dt * ref_v_[i], lower_[i], upper_[i]);
-          if (ref_[i] == lower_[i] || ref_[i] == upper_[i])
-            ref_v_[i] = 0;
+          reference_velocity_[axis_index] =
+              std::clamp(command_[axis_index], -velocity_limits_[axis_index],
+                         velocity_limits_[axis_index]);
+          reference_position_[axis_index] =
+              std::clamp(reference_position_[axis_index] +
+                             step_seconds * reference_velocity_[axis_index],
+                         position_lower_limits_[axis_index],
+                         position_upper_limits_[axis_index]);
+          if (reference_position_[axis_index] ==
+                  position_lower_limits_[axis_index] ||
+              reference_position_[axis_index] ==
+                  position_upper_limits_[axis_index])
+            reference_velocity_[axis_index] = 0;
         }
       }
-      for (size_t i = 0; i < 2; ++i)
-        motor_force_[i] = pitch_kp_[i] * (ref_[i] - state(i)) +
-                          pitch_kd_[i] * (ref_v_[i] - state(i, true));
-      double t = std::tan(ref_[2]);
-      for (size_t i = 0; i < 2; ++i) {
-        motor_force_[i + 2] =
-            kp_ * (heights_[i] * t - state(i + 2)) +
-            kd_ * (heights_[i] * (1 + t * t) * ref_v_[2] - state(i + 2, true));
+      // 2. Pitch PD servos act directly on the two revolute Gazebo joints.
+      for (size_t axis_index = 0; axis_index < 2; ++axis_index)
+        drive_effort_[axis_index] =
+            pitch_kp_[axis_index] *
+                (reference_position_[axis_index] - joint_state(axis_index)) +
+            pitch_kd_[axis_index] * (reference_velocity_[axis_index] -
+                                     joint_state(axis_index, true));
+      // 3. The single ML reference produces separate slide position/velocity
+      // targets: y_i = h_i * tan(ML), ydot_i = h_i * sec(ML)^2 * MLdot.
+      double ml_tangent = std::tan(reference_position_[2]);
+      for (size_t axis_index = 0; axis_index < 2; ++axis_index) {
+        drive_effort_[axis_index + 2] =
+            lateral_kp_ * (ml_heights_[axis_index] * ml_tangent -
+                           joint_state(axis_index + 2)) +
+            lateral_kd_ *
+                (ml_heights_[axis_index] * (1 + ml_tangent * ml_tangent) *
+                     reference_velocity_[2] -
+                 joint_state(axis_index + 2, true));
       }
-      for (size_t i = 0; i < 4; ++i) {
-        const double limit = i < 2 ? pitch_max_[i] : max_force_;
-        motor_force_[i] = std::clamp(motor_force_[i], -limit, limit);
+      // 4. Limit actuator effort, add reduced pitch dynamics, then write all
+      // four physical commands to the entity-component manager for physics.
+      for (size_t axis_index = 0; axis_index < 4; ++axis_index) {
+        const double limit = axis_index < 2 ? pitch_torque_limits_[axis_index]
+                                            : lateral_force_limit_;
+        drive_effort_[axis_index] =
+            std::clamp(drive_effort_[axis_index], -limit, limit);
       }
-      apply_direct(dt);
-      force(2, motor_force_[2]);
-      force(3, motor_force_[3]);
+      apply_pitch_efforts(step_seconds);
+      set_joint_effort(2, drive_effort_[2]);
+      set_joint_effort(3, drive_effort_[3]);
     } catch (const std::exception &ex) {
-      zero_motors();
+      zero_drive_efforts();
       RCLCPP_ERROR(nh_->get_logger(), "RISER write: %s", ex.what());
-      return Ret::ERROR;
+      return ReturnType::ERROR;
     }
-    return Ret::OK;
+    return ReturnType::OK;
   }
 };
 } // namespace riser_gazebo
