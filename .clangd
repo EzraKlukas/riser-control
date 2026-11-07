@@ -1,2 +1,14 @@
+If:
+  PathMatch: src/riser_subject_simulation/.*
 CompileFlags:
   CompilationDatabase: build/riser_subject_simulation
+---
+If:
+  PathMatch: src/riser_gazebo/.*
+CompileFlags:
+  CompilationDatabase: build/riser_gazebo
+---
+If:
+  PathMatch: src/riser_hardware/.*
+CompileFlags:
+  CompilationDatabase: build/riser_hardware

@@ -1,17 +1,23 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="public_angular_joint" params="name lower upper velocity mode">
+  <xacro:macro name="public_control_joint" params="name lower upper velocity mode all_commands:=false">
     <!-- Dictionary lookup rejects unsupported commands, including direct effort. -->
     <xacro:property name="command_interfaces"
-        value="${dict(position='position', velocity='velocity')}" />
+        value="${dict(position='position', velocity='velocity', angular_position='position', angular_velocity='velocity')}" />
     <joint name="${name}">
       <param name="lower">${lower}</param>
       <param name="upper">${upper}</param>
       <param name="velocity_limit">${velocity}</param>
-      <command_interface name="${command_interfaces[mode]}">
-        <param name="initial_value">0.0</param>
-      </command_interface>
+      <xacro:if value="${all_commands}">
+        <command_interface name="position" />
+        <command_interface name="velocity" />
+      </xacro:if>
+      <xacro:unless value="${all_commands}">
+        <command_interface name="${command_interfaces[mode]}">
+          <param name="initial_value">0.0</param>
+        </command_interface>
+      </xacro:unless>
       <state_interface name="position">
         <param name="initial_value">0.0</param>
       </state_interface>
@@ -33,7 +39,7 @@
         <hardware>
           <plugin>${'mock_components/GenericSystem' if backend == 'mock' else ('riser_gazebo/AngularSystem' if backend == 'gazebo' else 'riser_hardware/EthercatBoundary')}</plugin>
           <param name="physical_state_rate">${c['physical_state_rate_hz']}</param>
-          <param name="command_mode">${command_mode}</param>
+          <param name="command_mode">${dict(position='position', velocity='velocity', angular_position='angular_position', angular_velocity='angular_velocity', actuator_position='actuator_position', actuator_velocity='actuator_velocity')[command_mode]}</param>
           <xacro:pitch_parameters prefix="top" />
           <xacro:pitch_parameters prefix="bottom" />
           <param name="torso_height">${c['ml']['height_m']['torso']}</param>
@@ -41,25 +47,52 @@
           <param name="servo_kp">${c['servo']['kp_N_m']}</param>
           <param name="servo_kd">${c['servo']['kd_N_s_m']}</param>
           <param name="servo_max_force">${c['servo']['max_force_N']}</param>
+          <!-- Canonical axis order: pitch, torso, hip, foot. -->
+          <xacro:property name="mapping_axes" value="${['frame_pitch', 'torso_lateral', 'hip_lateral', 'foot_pitch']}" />
+          <param name="neutral_cad">${' '.join(str(k['neutral_cad'][axis]) for axis in mapping_axes)}</param>
         </hardware>
-        <xacro:public_angular_joint
+        <xacro:public_control_joint
             name="backboard_pitch"
             lower="${k['joints']['frame_pitch']['lower']}"
             upper="${k['joints']['frame_pitch']['upper']}"
             velocity="${k['joints']['frame_pitch']['velocity']}"
-            mode="${command_mode}" />
-        <xacro:public_angular_joint
+            mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
+        <xacro:public_control_joint
             name="foot_plate_pitch"
             lower="${k['joints']['foot_pitch']['lower']}"
             upper="${k['joints']['foot_pitch']['upper']}"
             velocity="${k['joints']['foot_pitch']['velocity']}"
-            mode="${command_mode}" />
-        <xacro:public_angular_joint
+            mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
+        <xacro:public_control_joint
             name="ml_angle"
             lower="${-c['ml']['limit_rad']}"
             upper="${c['ml']['limit_rad']}"
             velocity="${c['ml']['velocity_rad_s']}"
-            mode="${command_mode}" />
+            mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
+        <!-- Virtual actuator resources belong to the custom Gazebo adapter.
+             Mock/EtherCAT retain their existing three-coordinate contract. -->
+        <xacro:if value="${backend == 'gazebo'}">
+          <xacro:public_control_joint name="top_actuator"
+              lower="${k['joints']['top_actuator']['lower']}"
+              upper="${k['joints']['top_actuator']['upper']}"
+              velocity="${k['joints']['top_actuator']['velocity']}"
+              mode="${command_mode}" all_commands="true" />
+          <xacro:public_control_joint name="torso_actuator"
+              lower="${k['joints']['torso_actuator']['lower']}"
+              upper="${k['joints']['torso_actuator']['upper']}"
+              velocity="${k['joints']['torso_actuator']['velocity']}"
+              mode="${command_mode}" all_commands="true" />
+          <xacro:public_control_joint name="hip_actuator"
+              lower="${k['joints']['hip_actuator']['lower']}"
+              upper="${k['joints']['hip_actuator']['upper']}"
+              velocity="${k['joints']['hip_actuator']['velocity']}"
+              mode="${command_mode}" all_commands="true" />
+          <xacro:public_control_joint name="bottom_actuator"
+              lower="${k['joints']['bottom_actuator']['lower']}"
+              upper="${k['joints']['bottom_actuator']['upper']}"
+              velocity="${k['joints']['bottom_actuator']['velocity']}"
+              mode="${command_mode}" all_commands="true" />
+        </xacro:if>
       </ros2_control>
     </xacro:if>
     <xacro:if value="${backend == 'gazebo'}">

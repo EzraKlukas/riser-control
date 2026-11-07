@@ -1,7 +1,10 @@
 # Offline model references
 
-These files support geometry inspection and actuator-mapping development. Bringup
-does not load them; runtime parameters live in
+These files support geometry inspection and actuator-mapping development.
+`riser_kinematics` compiles its geometry factory from the single authoritative
+`model_reference/actuator_mapping.json`; see
+[the library documentation](../src/riser_kinematics/README.md). Bringup does not
+load them; runtime parameters live in
 [`riser_bringup/urdf/model`](../ros2_ws/src/riser_bringup/urdf/model) and
 [`riser_bringup/config`](../ros2_ws/src/riser_bringup/config).
 

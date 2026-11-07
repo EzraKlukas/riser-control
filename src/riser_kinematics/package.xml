@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>riser_kinematics</name>
+  <version>0.1.0</version>
+  <description>Independent CAD-relative actuator kinematics without ROS runtime dependencies.</description>
+  <maintainer email="maintainer@example.com">RISER maintainers</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <build_depend>python3</build_depend>
+  <test_depend>python3</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

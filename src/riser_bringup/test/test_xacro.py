@@ -1,6 +1,7 @@
 """ROS-installed Xacro acceptance checks for the angular interface boundary."""
 
 from pathlib import Path
+import json
 import xml.etree.ElementTree as E
 from ament_index_python.packages import get_package_share_directory
 import xacro
@@ -29,15 +30,15 @@ def test_angular_interfaces_and_shared_geometry():
                 assert control is None
             else:
                 assert control.find("hardware/plugin").text == plugin
-                assert [j.get("name") for j in control.findall("joint")] == [
-                    "backboard_pitch",
-                    "foot_plate_pitch",
-                    "ml_angle",
-                ]
+                expected = ["backboard_pitch", "foot_plate_pitch", "ml_angle"]
+                if backend == "gazebo":
+                    expected += ["top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"]
+                assert [j.get("name") for j in control.findall("joint")] == expected
                 for j in control.findall("joint"):
-                    assert [x.get("name") for x in j.findall("command_interface")] == [
-                        mode
-                    ]
+                    commands = ["position", "velocity"] if backend == "gazebo" else [mode]
+                    assert [x.get("name") for x in j.findall("command_interface")] == commands
+                    for parameter in ("lower", "upper", "velocity_limit"):
+                        assert j.find(f"param[@name='{parameter}']") is not None
                     assert [x.get("name") for x in j.findall("state_interface")] == [
                         "position",
                         "velocity",
@@ -85,6 +86,32 @@ def test_direct_pitch_model():
         assert direct.find(".//hardware/param[@name='pitch_drive']") is None
 
 
+def test_neutral_frames_and_geometric_limits():
+    share = Path(get_package_share_directory("riser_bringup"))
+    k = json.loads((share / 'urdf/model/kinematics.yaml').read_text())
+    c = json.loads((share / 'config/control_coordinates.json').read_text())
+    root = E.fromstring(xacro.process_file(str(share / 'urdf/riser.urdf.xacro'),
+        mappings={'backend': 'gazebo'}).toxml())
+    hardware = root.find('ros2_control/hardware')
+    axes = ['frame_pitch', 'torso_lateral', 'hip_lateral', 'foot_pitch']
+    assert list(map(float, hardware.find("param[@name='neutral_cad']").text.split())) == [
+        k['neutral_cad'][axis] for axis in axes]
+    backboard = root.find("joint[@name='backboard_pitch']")
+    assert list(map(float, backboard.find('origin').get('rpy').split())) == [0, 0, 0]
+    assert float(backboard.find('limit').get('upper')) == k['joints']['frame_pitch']['upper']
+    assert float(root.find(
+        "ros2_control/joint[@name='backboard_pitch']/param[@name='upper']").text) == k['joints']['frame_pitch']['upper']
+    for name in ('torso', 'hip'):
+        joint = root.find(f"joint[@name='{name}_lateral']")
+        y = float(joint.find('origin').get('xyz').split()[1])
+        contact = root.find(f"link[@name='{name}_carriage']/collision/origin")
+        assert abs(y + float(contact.get('xyz').split()[1])) < 1e-12
+        assert float(joint.find('limit').get('upper')) == .335
+    ml = root.find("joint[@name='ml_angle']/limit")
+    assert float(ml.get('upper')) == c['ml']['limit_rad']
+    assert float(ml.get('velocity')) == c['ml']['velocity_rad_s']
+
+
 @pytest.mark.parametrize("backend", ["mock", "gazebo", "ethercat"])
 @pytest.mark.parametrize("mode", ["effort", "acceleration"])
 def test_unsupported_command_is_rejected(backend, mode):
@@ -94,3 +121,13 @@ def test_unsupported_command_is_rejected(backend, mode):
             str(share / "urdf/riser.urdf.xacro"),
             mappings={"backend": backend, "command_mode": mode},
         )
+
+
+@pytest.mark.parametrize("mode", ["angular_position", "angular_velocity", "actuator_position", "actuator_velocity"])
+def test_gazebo_startup_modes(mode):
+    share = Path(get_package_share_directory("riser_bringup"))
+    root = E.fromstring(xacro.process_file(str(share / "urdf/riser.urdf.xacro"),
+        mappings={"backend": "gazebo", "command_mode": mode}).toxml())
+    assert root.find("ros2_control/hardware/param[@name='command_mode']").text == mode
+    assert len(root.findall("ros2_control/joint")) == 7
+    assert len(root.findall("ros2_control/joint/command_interface")) == 14

@@ -7,7 +7,7 @@
     "torso": 1.2319,
     "hip": 0.508
   },
-  "limits_status": "ALL operating limits, velocity and effort bounds below are provisional demonstration values, NOT hardware travel limits",
+  "limits_status": "Estimated mechanical travel from approximate user-measured limit-switch strokes, converted through canonical geometry. Speed/effort caps remain provisional simulation settings; not certified collision limits.",
   "joints": {
     "frame_pitch": {
       "parent": "base_link",
@@ -20,7 +20,7 @@
       ],
       "rpy_rad": [
         0,
-        -0.0010031365,
+        0,
         0
       ],
       "axis": [
@@ -28,9 +28,9 @@
         1,
         0
       ],
-      "lower": -0.08,
-      "upper": 0.08,
-      "velocity": 0.05,
+      "lower": -0.23006989930207766,
+      "upper": 0.216348932826856,
+      "velocity": 0.012,
       "effort": 500
     },
     "torso_lateral": {
@@ -42,13 +42,13 @@
         1,
         0
       ],
-      "lower": -0.05,
-      "upper": 0.05,
+      "lower": -0.335,
+      "upper": 0.335,
       "velocity": 0.02,
       "effort": 500,
       "xyz_m": [
         -0.2190507,
-        0.274828,
+        0.0060000019,
         0.116675
       ],
       "rpy_rad": [
@@ -66,13 +66,13 @@
         1,
         0
       ],
-      "lower": -0.05,
-      "upper": 0.05,
+      "lower": -0.335,
+      "upper": 0.335,
       "velocity": 0.02,
       "effort": 500,
       "xyz_m": [
         -0.2190507,
-        0.274828,
+        0.0060000019,
         0.1135
       ],
       "rpy_rad": [
@@ -100,10 +100,41 @@
         1,
         0
       ],
-      "lower": -0.08,
-      "upper": 0.08,
-      "velocity": 0.05,
+      "lower": -0.4785836006777029,
+      "upper": 0.22070887757756963,
+      "velocity": 0.01,
       "effort": 500
+    },
+    "bottom_actuator": {
+      "lower": -0.08,
+      "upper": 0.24,
+      "velocity": 0.01,
+      "effort": 10000
+    },
+    "top_actuator": {
+      "lower": -0.335,
+      "upper": 0.335,
+      "velocity": 0.02,
+      "effort": 10000
+    },
+    "torso_actuator": {
+      "lower": -0.335,
+      "upper": 0.335,
+      "velocity": 0.02,
+      "effort": 10000
+    },
+    "hip_actuator": {
+      "lower": -0.335,
+      "upper": 0.335,
+      "velocity": 0.02,
+      "effort": 10000
     }
+  },
+  "actuator_limits_provenance": "User measurements: top/torso/hip total travel about 0.67 m, neutral at midpoint; bottom total 0.32 m, flat neutral 0.08 m from the rearward (negative stroke) stop. Pitch endpoints invert evidence/model_reference/actuator_mapping.json on its original branches, using s=f(q_CAD)-f(neutral_cad). Neutral offsets are geometry, not session encoder calibration. See reports/motion-envelope.md.",
+  "neutral_cad": {
+    "frame_pitch": 0.001003136473,
+    "torso_lateral": -0.2688279981,
+    "hip_lateral": -0.2688279981,
+    "foot_pitch": 0.0
   }
 }

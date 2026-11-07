@@ -5,8 +5,10 @@
 The model is derived from the SolidWorks assembly `UBC Riser/Riser 11-19-19`,
 using its saved operating placements and the Vertical floor/AP connector
 configurations. Coordinates map as ROS `(x, y, z) = (CAD z, CAD x, CAD y + 0.6477 m)`.
-Zero commands preserve that pose, including the backboard's approximately
--0.001 rad reference pitch and 96.8 mm lateral frame offset.
+The mapping evidence retains that saved CAD pose. Operational zero now means
+vertical backboard, flat footplate and carriage contact centres above the
+force-plate ML midpoint. `kinematics.yaml` supplies the fixed CAD-to-neutral
+coordinate offsets; these are separate from session encoder calibration.
 
 CAD placements supply joint axes, setup heights and contact-surface locations.
 Primitive visuals represent the frame and carriages; collisions cover the two
@@ -34,10 +36,19 @@ anchored base and vertical gravity of 9.80665 m/s². It does not reconstruct
 removed-body bearing loads or free-base reactions.
 
 Model files live in
-[`ros2_ws/src/riser_bringup/urdf/model`](../ros2_ws/src/riser_bringup/urdf/model).
+[`ros2_ws/src/riser_bringup/urdf/model`](../src/riser_bringup/urdf/model).
 Plate properties are defined in `urdf/riser.urdf.xacro`. Offline
 [actuator mappings and linkage geometry](../evidence/README.md) retain the CAD
 pin geometry for mapping work. Source CAD and extraction/table-generation tools
 are not bundled; changes to linkage geometry or gravity require recomputing the
-reduced dynamics. Damping, servo gains and operating limits remain simulation
+reduced dynamics. The tables still span only CAD q = +/-0.08 rad. Wider measured
+travel currently uses endpoint-held coefficients after converting operational
+pitch to CAD q. This enables the enlarged geometric envelope with approximate
+dynamics, not validated full-travel inertial accuracy. Damping, servo gains and operating limits remain simulation
 parameters. Participant mechanics and counterbalance spring laws are not modelled.
+
+The [motion-envelope audit](motion-envelope.md) distinguishes plate-footprint
+bounds, CAD versus centred joint zeros, measured actuator stops, and the current
+reduced-dynamics table domain. Applied travel limits come from approximate user-measured strokes and canonical
+linkage geometry; speed and effort settings remain provisional. The audit also
+contains a Windows/CAD resampling task prompt.

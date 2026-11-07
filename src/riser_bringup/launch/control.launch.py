@@ -19,10 +19,10 @@ import xacro
 def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
     mode = LaunchConfiguration("command_mode").perform(context)
+    if mode.startswith("actuator_") and backend != "gazebo":
+        raise ValueError("Actuator command modes currently require the Gazebo backend")
     share = Path(get_package_share_directory("riser_bringup"))
-    world = LaunchConfiguration("world").perform(context) or str(
-        share / "worlds/riser_world.sdf"
-    )
+    world = str(share / "worlds/riser_world.sdf")
     plot = LaunchConfiguration("plot").perform(context) == "true";
     wrench_input = LaunchConfiguration("wrench_input").perform(context) == "true";
     sim = backend == "gazebo"
@@ -52,9 +52,8 @@ def setup(context):
     ]
     if sim:
         gz = Path(get_package_share_directory("ros_gz_sim"))
-        plugin_dir = ":".join(
-            str(Path(get_package_share_directory(package)).parents[1] / "lib")
-            for package in ("riser_gazebo", "riser_subject_simulation")
+        plugin_dir = str(
+            Path(get_package_share_directory("riser_subject_simulation")).parents[1] / "lib"
         )
         actions += [
             SetEnvironmentVariable(
@@ -118,7 +117,8 @@ def setup(context):
                 parameters=[{"use_sim_time": False}],
             )
         )
-    chosen = f"riser_{mode}_controller"
+    controller_mode = mode.removeprefix("angular_")
+    chosen = f"riser_{controller_mode}_controller"
     for name in ["joint_state_broadcaster", chosen]:
         args = [
             name,
@@ -165,7 +165,6 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "headless", default_value="false", choices=["true", "false"]
             ),
-            DeclareLaunchArgument("world", default_value=""),
             DeclareLaunchArgument("force_plate_rate", default_value="500"),
             DeclareLaunchArgument(
                 "backend", default_value="mock", choices=["mock", "gazebo", "ethercat"]
@@ -173,7 +172,8 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "command_mode",
                 default_value="position",
-                choices=["position", "velocity"],
+                choices=["position", "velocity", "angular_position", "angular_velocity",
+                         "actuator_position", "actuator_velocity"],
             ),
             DeclareLaunchArgument(
                 "plot",

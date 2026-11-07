@@ -74,16 +74,6 @@ and scheduling. Reduced pitch inertia uses acceleration delayed by one physics
 step. Servo gains and travel bounds are provisional simulation parameters.
 See [CAD model derivation](reports/model.md) for the geometry and dynamics.
 
-Two worlds exercise the plates with prescribed physical loads or a falling
-2 kg box:
-
-```bash
-riser_share="$(ros2 pkg prefix riser_bringup)/share/riser_bringup"
-ros2 launch riser_bringup control.launch.py backend:=gazebo plot:=false \
-  world:="$riser_share/worlds/force_plate_demo.sdf"
-# For box contact, use worlds/force_plate_contact_demo.sdf instead.
-```
-
 Subject dynamics and a balance controller are not yet implemented. The EtherCAT
 backend is an unimplemented hardware boundary and refuses configuration.
 
@@ -92,7 +82,7 @@ backend is an unimplemented hardware boundary and refuses configuration.
 | Path | Contents |
 | --- | --- |
 | `ros2_ws/src/riser_bringup/` | Launch files, controllers, URDF/Xacro, model parameters, worlds and state adapters. |
-| `ros2_ws/src/riser_gazebo/` | Physical actuation, reduced pitch dynamics and demo load plugin. |
+| `ros2_ws/src/riser_gazebo/` | Physical actuation and reduced pitch dynamics. |
 | `ros2_ws/src/riser_hardware/` | Hardware boundary and standalone actuator-mapping helpers. |
 | `ros2_ws/src/riser_subject_simulation/` | Draft subject-load script; not yet a ROS package. |
 | `evidence/` | Small offline linkage and actuator-mapping references. |

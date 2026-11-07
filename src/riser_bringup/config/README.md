@@ -12,8 +12,8 @@ and effort. Servo gains and limits are provisional simulation values.
 
 Model geometry, kinematics, rigid-body properties and reduced pitch dynamics live
 in `../urdf/model`; plate properties are in `../urdf/riser.urdf.xacro`. Simulation
-worlds and load/contact demonstrations live in `../worlds`. Launch selects the
-world and force-sensor rate with `world:=...` and `force_plate_rate:=...`.
+world `../worlds/riser_world.sdf` is used by launch. Set the force-sensor rate
+with `force_plate_rate:=...`.
 
 `reduced_pitch.json` stores full-precision samples in the order listed by
 `columns`: angle, inertia, inertia derivative, gravity torque and damping.

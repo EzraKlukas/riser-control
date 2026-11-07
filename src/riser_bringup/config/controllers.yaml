@@ -3,6 +3,10 @@ controller_manager:
     update_rate: 1000
     joint_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
+    riser_actuator_position_controller:
+      type: joint_trajectory_controller/JointTrajectoryController
+    riser_actuator_velocity_controller:
+      type: forward_command_controller/ForwardCommandController
     riser_position_controller:
       type: joint_trajectory_controller/JointTrajectoryController
     riser_velocity_controller:
@@ -17,4 +21,16 @@ riser_position_controller:
 riser_velocity_controller:
   ros__parameters:
     joints: [backboard_pitch, foot_plate_pitch, ml_angle]
+    interface_name: velocity
+
+riser_actuator_position_controller:
+  ros__parameters:
+    joints: [top_actuator, torso_actuator, hip_actuator, bottom_actuator]
+    command_interfaces: [position]
+    state_interfaces: [position, velocity]
+    allow_partial_joints_goal: false
+
+riser_actuator_velocity_controller:
+  ros__parameters:
+    joints: [top_actuator, torso_actuator, hip_actuator, bottom_actuator]
     interface_name: velocity

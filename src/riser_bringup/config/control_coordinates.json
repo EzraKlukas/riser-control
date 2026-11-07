@@ -6,17 +6,19 @@
     "ml_angle"
   ],
   "ml": {
-    "model": "y_i = h_i * tan(theta_ml); displacements relative to the fixed setup pose",
+    "model": "y_i = h_i * tan(theta_ml); displacements relative to centred operational neutral",
     "height_m": {
       "torso": 1.348575,
       "hip": 0.6215
     },
-    "limit_rad": 0.03705919817,
-    "velocity_rad_s": 0.0148304692,
+    "limit_rad": 0.24348197180382475,
+    "velocity_rad_s": 0.013828819756226319,
     "height_frame": "backboard local vertical from common foot/backboard pitch axis; fixed setup, independent of AP pitch",
     "state_estimate": "atan((h_t*y_t+h_h*y_h)/(h_t^2+h_h^2))",
     "effort": "tau_ml = sum(h_i sec(theta_ml)^2 F_i), N m",
-    "stance_width_model": false
+    "stance_width_model": false,
+    "velocity_note": "Conservative simulation rate: h_max * sec(limit_rad)^2 * velocity_rad_s <= 0.02 m/s.",
+    "limit_note": "Derived from measured +/-0.335 m independent slide travel: min atan(slide_limit/h_i)."
   },
   "servo": {
     "kp_N_m": 400000.0,
@@ -24,7 +26,7 @@
     "max_force_N": 10000.0,
     "note": "Provisional linear servo gains for the torso and hip lateral slides."
   },
-  "limits_status": "Conservative demonstration limits inherited from reduced model; no hardware calibration",
+  "limits_status": "Estimated geometry-based travel; provisional simulation velocity/servo settings, no encoder calibration.",
   "direct_pitch": {
     "top": {
       "kp_Nm_rad": 937419.0801,

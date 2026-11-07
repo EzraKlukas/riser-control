@@ -7,3 +7,7 @@ log/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+
+# clangd
+.clangd
+.cache/*

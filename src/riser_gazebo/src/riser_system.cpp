@@ -1,6 +1,7 @@
 // Humble + Fortress. Direct physical pitch torques with removed
 // stage/rod dynamics reduced onto pitch.
 // No physical pitch-joint position/velocity resets are used.
+#include "riser_gazebo/reference_mapping.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
@@ -17,6 +18,24 @@
 #include <vector>
 
 namespace riser_gazebo {
+
+constexpr std::size_t kPublicJointCount = PublicJointCount;
+constexpr std::size_t kAngularInterfaceCount = AngularCount;
+constexpr std::size_t kLinearInterfaceCount = ActuatorCount;
+
+// Startup selection only. Runtime claim switching is intentionally not handled.
+static CommandMode str_to_cmd_mode(const std::string &mode) {
+  if (mode == "position" || mode == "angular_position")
+    return CommandMode::AngularPosition;
+  if (mode == "velocity" || mode == "angular_velocity")
+    return CommandMode::AngularVelocity;
+  if (mode == "actuator_position")
+    return CommandMode::ActuatorPosition;
+  if (mode == "actuator_velocity")
+    return CommandMode::ActuatorVelocity;
+  return CommandMode::None;
+}
+
 using ReturnType = hardware_interface::return_type;
 
 // Loaded by gz_ros2_control through pluginlib, rather than directly by Gazebo.
@@ -24,28 +43,43 @@ using ReturnType = hardware_interface::return_type;
 // PreUpdate. This class implements hardware callbacks, not Gazebo update hooks.
 class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   sim::EntityComponentManager *ecm_ = nullptr;
-  // Public interfaces use radians. Only ML couples two physical joints.
-  std::array<std::string, 3> public_joint_names_{
-      {"backboard_pitch", "foot_plate_pitch", "ml_angle"}};
+  // Public angles use radians, actuator strokes use metres from neutral.
+  // Only ML couples two physical joints.
+  std::array<std::string, kPublicJointCount> public_joint_names_{
+      {"backboard_pitch", "foot_plate_pitch", "ml_angle", "top_actuator",
+       "torso_actuator", "hip_actuator", "bottom_actuator"}};
   // Physical indices: 0/1 are revolute pitch joints; 2/3 are prismatic slides.
   std::array<std::string, 4> physical_joint_names_{
       {"backboard_pitch", "foot_plate_pitch", "torso_lateral", "hip_lateral"}};
   std::array<sim::Entity, 4> physical_joints_{};
-  // Exported interfaces hold pointers into these arrays. Controllers write
-  // command_; write() converts it into references and then physical efforts.
-  std::array<double, 3> position_{}, velocity_{}, effort_{}, command_{},
+  // State/reference arrays use PublicJoint indices. Commands have separate
+  // angular/actuator storage; physical reference arrays use kin::AxisIndex.
+  std::array<double, kPublicJointCount> position_{}, velocity_{}, effort_{},
       reference_position_{}, reference_velocity_{};
-  std::array<double, 3> position_lower_limits_{}, position_upper_limits_{},
-      velocity_limits_{};
+
+  // 14 total command interfaces.
+  std::array<double, kAngularInterfaceCount> angular_position_command_{};
+  std::array<double, kAngularInterfaceCount> angular_velocity_command_{};
+  std::array<double, kLinearInterfaceCount> actuator_position_command_{};
+  std::array<double, kLinearInterfaceCount> actuator_velocity_command_{};
+  std::array<double, kPublicJointCount> position_lower_limits_{},
+      position_upper_limits_{}, velocity_limits_{};
   std::array<double, 4>
       drive_effort_{}; // Pitch torques [N m], slide forces [N].
   std::array<double, 2> ml_heights_{};
+  ReferenceMapping reference_mapping_;
+  // Canonical mapping order: frame pitch, torso slide, hip slide, foot pitch.
+  kin::Coordinates physical_position_{}, physical_velocity_{},
+      measured_jacobian_{};
+  kin::Coordinates physical_reference_position_{},
+      physical_reference_velocity_{};
+  kin::Coordinates neutral_cad_{};
+  bool references_seeded_ = false;
   sensor_msgs::msg::JointState physical_msg_;
   int64_t last_state_publish_ns_ = -1;
   double physical_state_rate_hz_ = 100;
   static constexpr size_t physical_count_ = 4;
   double lateral_kp_ = 0, lateral_kd_ = 0, lateral_force_limit_ = 0;
-  // Table columns: angle, inertia, inertia derivative, gravity torque, damping.
   struct ReducedSample {
     double angle, inertia, inertia_derivative, gravity_torque, damping;
   };
@@ -87,7 +121,11 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
               ? (angular_velocity - previous_pitch_velocity_[axis_index]) /
                     step_seconds
               : 0.;
-      const auto sample = interpolate_pitch_dynamics(axis_index, angle);
+      // Tables retain saved-CAD coordinates, while Gazebo joints now measure
+      // from vertical/flat neutral. A constant offset does not change rates.
+      const auto axis = axis_index == 0 ? kin::FramePitch : kin::FootPitch;
+      const auto sample =
+          interpolate_pitch_dynamics(axis_index, angle + neutral_cad_[axis]);
       // M(q) qdd + 1/2 M'(q) qd^2 + D(q) qd - Qg(q): the
       // complete planar contribution of the removed audited stage and rod.
       // Acceleration feedback is delayed by one physics step. This numerical
@@ -102,15 +140,18 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     }
     previous_pitch_velocity_valid_ = true;
   }
+
   bool state_ready_ = false, active_ = false;
   int64_t last_write_ns_ = -1;
-  std::string command_mode_ = "position";
+  CommandMode command_mode_ = CommandMode::None;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
+
   double
   hardware_parameter(const hardware_interface::HardwareInfo &hardware_info,
                      const std::string &parameter_name) {
     return std::stod(hardware_info.hardware_parameters.at(parameter_name));
   }
+
   // Read Gazebo's first DOF; all four physical joints have one DOF.
   double joint_state(size_t axis_index, bool read_velocity = false) const {
     if (read_velocity) {
@@ -143,8 +184,22 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     drive_effort_.fill(0);
   }
 
+  void seed_references() {
+    reference_position_ = position_;
+    reference_velocity_.fill(0);
+    physical_reference_position_ = physical_position_;
+    physical_reference_velocity_.fill(0);
+    std::copy_n(position_.begin(), AngularCount,
+                angular_position_command_.begin());
+    angular_velocity_command_.fill(0);
+    for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
+      actuator_position_command_[axis] = position_[PublicForAxis[axis]];
+    actuator_velocity_command_.fill(0);
+    references_seeded_ = true;
+  }
+
 public:
-  bool initSim(rclcpp::Node::SharedPtr &node,
+  bool initSim(rclcpp::Node::SharedPtr &node, // is node the cm?
                std::map<std::string, sim::Entity> &gazebo_joints,
                const hardware_interface::HardwareInfo &hardware_info,
                sim::EntityComponentManager &ecm, int &) override {
@@ -154,11 +209,12 @@ public:
     nh_ = node;
     ecm_ = &ecm;
     try {
-      command_mode_ = hardware_info.hardware_parameters.at("command_mode");
-      if (command_mode_ != "position" && command_mode_ != "velocity")
+      command_mode_ =
+          str_to_cmd_mode(hardware_info.hardware_parameters.at("command_mode"));
+      if (command_mode_ == CommandMode::None)
         throw std::runtime_error("Unsupported command mode");
       // Resolve all four physical Gazebo joints, including the two slides
-      // that are not exported as individually commandable public joints.
+      // whose actuator resources are separately exported below.
       for (size_t axis_index = 0; axis_index < physical_count_; ++axis_index) {
         physical_joints_[axis_index] =
             gazebo_joints.at(physical_joint_names_[axis_index]);
@@ -218,10 +274,15 @@ public:
       lateral_kd_ = hardware_parameter(hardware_info, "servo_kd");
       lateral_force_limit_ =
           hardware_parameter(hardware_info, "servo_max_force");
-      // Public angular limits and slide servo settings come from the Xacro.
-      if (hardware_info.joints.size() != 3)
-        throw std::runtime_error("Exactly three public joints required");
-      for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
+      if (!std::isfinite(lateral_kp_) || lateral_kp_ <= 0 ||
+          !std::isfinite(lateral_kd_) || lateral_kd_ < 0 ||
+          !std::isfinite(lateral_force_limit_) || lateral_force_limit_ <= 0)
+        throw std::runtime_error("Invalid lateral servo gains");
+      // Angular and actuator limits come from Xacro, in rad and m respectively.
+      if (hardware_info.joints.size() != kPublicJointCount)
+        throw std::runtime_error("Exactly seven public joints required");
+      for (size_t axis_index = 0; axis_index < kPublicJointCount;
+           ++axis_index) {
         auto joint =
             std::find_if(hardware_info.joints.begin(),
                          hardware_info.joints.end(), [&](const auto &joint) {
@@ -235,6 +296,34 @@ public:
             std::stod(joint->parameters.at("upper"));
         velocity_limits_[axis_index] =
             std::stod(joint->parameters.at("velocity_limit"));
+      }
+      Limits limits{};
+      for (std::size_t i = 0; i < PublicJointCount; ++i)
+        limits[i] = {position_lower_limits_[i], position_upper_limits_[i],
+                     velocity_limits_[i]};
+      std::istringstream neutral_stream(
+          hardware_info.hardware_parameters.at("neutral_cad"));
+      for (auto &offset : neutral_cad_)
+        if (!(neutral_stream >> offset))
+          throw std::runtime_error("Malformed CAD neutral offsets");
+      neutral_stream >> std::ws;
+      if (!neutral_stream.eof())
+        throw std::runtime_error("Extra CAD neutral offsets");
+      if (reference_mapping_.configure(limits, ml_heights_, neutral_cad_) !=
+          kin::Error::None)
+        throw std::runtime_error("Invalid actuator/ML mapping configuration");
+      for (std::size_t i = 0; i < 2; ++i) {
+        const auto axis = i == 0 ? kin::FramePitch : kin::FootPitch;
+        const auto &table = reduced_pitch_tables_[i];
+        const auto joint = i == 0 ? Backboard : FootPlate;
+        if (limits[joint].lower + neutral_cad_[axis] < table.front().angle ||
+            limits[joint].upper + neutral_cad_[axis] > table.back().angle)
+          RCLCPP_WARN(
+              node->get_logger(),
+              "%s pitch travel exceeds CAD dynamics table [%g, %g] rad; "
+              "using endpoint coefficients outside it until CAD resampling",
+              i == 0 ? "Top" : "Bottom", table.front().angle,
+              table.back().angle);
       }
       physical_state_rate_hz_ =
           hardware_parameter(hardware_info, "physical_state_rate");
@@ -261,33 +350,42 @@ public:
   std::vector<hardware_interface::StateInterface>
   export_state_interfaces() override {
     std::vector<hardware_interface::StateInterface> interfaces;
-    for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
-      interfaces.emplace_back(public_joint_names_[axis_index], "position",
-                              &position_[axis_index]);
-      interfaces.emplace_back(public_joint_names_[axis_index], "velocity",
-                              &velocity_[axis_index]);
-      interfaces.emplace_back(public_joint_names_[axis_index], "effort",
-                              &effort_[axis_index]);
+    for (size_t joint_index = 0; joint_index < kPublicJointCount;
+         ++joint_index) {
+      interfaces.emplace_back(public_joint_names_[joint_index], "position",
+                              &position_[joint_index]);
+      interfaces.emplace_back(public_joint_names_[joint_index], "velocity",
+                              &velocity_[joint_index]);
+      interfaces.emplace_back(public_joint_names_[joint_index], "effort",
+                              &effort_[joint_index]);
     }
     return interfaces;
   }
-  // Exactly one command type per public joint, selected at initialization.
+  // Both types are registered; write() consumes only the startup-selected
+  // family. Claim-based exclusivity/runtime mode switching remains future work.
   std::vector<hardware_interface::CommandInterface>
   export_command_interfaces() override {
     std::vector<hardware_interface::CommandInterface> interfaces;
-    for (size_t axis_index = 0; axis_index < 3; ++axis_index)
-      interfaces.emplace_back(public_joint_names_[axis_index], command_mode_,
-                              &command_[axis_index]);
+    for (size_t i = 0; i < kAngularInterfaceCount; ++i) {
+      interfaces.emplace_back(public_joint_names_[i], "position",
+                              &angular_position_command_[i]);
+      interfaces.emplace_back(public_joint_names_[i], "velocity",
+                              &angular_velocity_command_[i]);
+    }
+    for (size_t axis = 0; axis < ActuatorCount; ++axis) {
+      interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
+                              "position", &actuator_position_command_[axis]);
+      interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
+                              "velocity", &actuator_velocity_command_[axis]);
+    }
     return interfaces;
   }
   hardware_interface::CallbackReturn
   on_activate(const rclcpp_lifecycle::State &) override {
-    // Hardware activation seeds position references from the last read.
     active_ = true;
-    reference_position_ = position_;
-    reference_velocity_.fill(0);
-    command_ =
-        command_mode_ == "position" ? position_ : std::array<double, 3>{};
+    references_seeded_ = false;
+    if (state_ready_)
+      seed_references();
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   hardware_interface::CallbackReturn
@@ -298,29 +396,29 @@ public:
   }
   ReturnType read(const rclcpp::Time &now, const rclcpp::Duration &) override {
     try {
-      position_[0] = joint_state(0);
-      position_[1] = joint_state(1);
-      velocity_[0] = joint_state(0, true);
-      velocity_[1] = joint_state(1, true);
-      // Least-squares fit of y_i = h_i * tan(ML). This still produces an angle
-      // when the slides disagree; it does not detect or correct that mismatch.
-      double torso_height = ml_heights_[0], hip_height = ml_heights_[1],
-             height_squared_sum =
-                 torso_height * torso_height + hip_height * hip_height,
-             ml_tangent =
-                 (torso_height * joint_state(2) + hip_height * joint_state(3)) /
-                 height_squared_sum;
-      position_[2] = std::atan(ml_tangent);
-      velocity_[2] = (torso_height * joint_state(2, true) +
-                      hip_height * joint_state(3, true)) /
-                     (height_squared_sum * (1 + ml_tangent * ml_tangent));
-      // Report the previous commanded drive efforts, not measured joint loads.
-      // ML torque follows virtual work: tau = sum(h_i * sec(ML)^2 * F_i).
-      effort_[0] = drive_effort_[0];
-      effort_[1] = drive_effort_[1];
-      effort_[2] =
-          (1 + ml_tangent * ml_tangent) *
-          (torso_height * drive_effort_[2] + hip_height * drive_effort_[3]);
+      kin::Coordinates q{}, qdot{};
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+        q[axis] = joint_state(PhysicalForAxis[axis]);
+        qdot[axis] = joint_state(PhysicalForAxis[axis], true);
+      }
+      // observe() fills all seven states, including s=f(q), sdot=J*qdot for
+      // the two virtual pitch actuators and the signed lateral strokes.
+      if (reference_mapping_.observe(q, qdot, position_, velocity_,
+                                     measured_jacobian_) != kin::Error::None)
+        throw std::runtime_error("Invalid measured actuator/ML state");
+      physical_position_ = q;
+      physical_velocity_ = qdot;
+      effort_[Backboard] = drive_effort_[BackboardJoint];
+      effort_[FootPlate] = drive_effort_[FootPlateJoint];
+      const double tangent = std::tan(position_[Ml]);
+      effort_[Ml] = (1 + tangent * tangent) *
+                    (ml_heights_[0] * drive_effort_[TorsoJoint] +
+                     ml_heights_[1] * drive_effort_[HipJoint]);
+      // Virtual work: tau_q = J * F_actuator. These are commanded equivalent
+      // efforts, NOT measured motor forces or reconstructed linkage reactions.
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
+        effort_[PublicForAxis[axis]] =
+            drive_effort_[PhysicalForAxis[axis]] / measured_jacobian_[axis];
       if (last_state_publish_ns_ < 0 ||
           now.nanoseconds() - last_state_publish_ns_ >=
               1e9 / physical_state_rate_hz_) {
@@ -330,15 +428,16 @@ public:
           physical_msg_.position[axis_index] = joint_state(axis_index);
           physical_msg_.velocity[axis_index] = joint_state(axis_index, true);
         }
-        physical_msg_.position[physical_count_] = position_[2];
-        physical_msg_.velocity[physical_count_] = velocity_[2];
+        physical_msg_.position[physical_count_] = position_[Ml];
+        physical_msg_.velocity[physical_count_] = velocity_[Ml];
         state_pub_->publish(physical_msg_);
         last_state_publish_ns_ = now.nanoseconds();
       }
       state_ready_ = true;
     } catch (const std::exception &ex) {
       if (state_ready_) {
-        // Empty components are tolerated only until the first successful read.
+        // Empty components are tolerated only until the first successful
+        // read.
         RCLCPP_ERROR(nh_->get_logger(), "RISER read: %s", ex.what());
         zero_drive_efforts();
         return ReturnType::ERROR;
@@ -351,8 +450,10 @@ public:
     // gz_ros2_control passes time since its last controller update, not since
     // its previous physics-step write. Integrate only the actual write delta.
     const auto write_time_ns = now.nanoseconds();
-    if (last_write_ns_ >= 0 && write_time_ns < last_write_ns_)
+    if (last_write_ns_ >= 0 && write_time_ns < last_write_ns_) {
       previous_pitch_velocity_valid_ = false;
+      references_seeded_ = false;
+    }
     double step_seconds =
         last_write_ns_ < 0
             ? 0.
@@ -367,7 +468,7 @@ public:
       zero_drive_efforts();
       try {
         if (step_seconds > 0)
-          apply_pitch_efforts(step_seconds);
+          apply_pitch_efforts(step_seconds); // applies joint efforts.
       } catch (const std::exception &ex) {
         RCLCPP_ERROR(nh_->get_logger(), "RISER passive dynamics: %s",
                      ex.what());
@@ -378,51 +479,51 @@ public:
     try {
       if (step_seconds <= 0)
         return ReturnType::OK;
-      // 1. Position commands are absolute targets. Velocity commands integrate
-      // bounded references; reaching an angular limit zeros reference velocity.
-      for (size_t axis_index = 0; axis_index < 3; ++axis_index) {
-        if (!std::isfinite(command_[axis_index]))
-          throw std::domain_error("Nonfinite command");
-        if (command_mode_ == "position") {
-          if (command_[axis_index] < position_lower_limits_[axis_index] ||
-              command_[axis_index] > position_upper_limits_[axis_index])
-            throw std::domain_error("Angular target outside bounds");
-          reference_position_[axis_index] = command_[axis_index];
-          reference_velocity_[axis_index] = 0;
-        } else {
-          reference_velocity_[axis_index] =
-              std::clamp(command_[axis_index], -velocity_limits_[axis_index],
-                         velocity_limits_[axis_index]);
-          reference_position_[axis_index] =
-              std::clamp(reference_position_[axis_index] +
-                             step_seconds * reference_velocity_[axis_index],
-                         position_lower_limits_[axis_index],
-                         position_upper_limits_[axis_index]);
-          if (reference_position_[axis_index] ==
-                  position_lower_limits_[axis_index] ||
-              reference_position_[axis_index] ==
-                  position_upper_limits_[axis_index])
-            reference_velocity_[axis_index] = 0;
-        }
+      if (!references_seeded_)
+        seed_references();
+      PublicCoordinates commands{}; // one unified command collector.
+      if (angular(command_mode_)) {
+        const auto &source = velocity(command_mode_)
+                                 ? angular_velocity_command_
+                                 : angular_position_command_;
+        std::copy(source.begin(), source.end(), commands.begin());
+      } else {
+        const auto &source = velocity(command_mode_)
+                                 ? actuator_velocity_command_
+                                 : actuator_position_command_;
+        for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
+          commands[PublicForAxis[axis]] = source[axis];
       }
-      // 2. Pitch PD servos act directly on the two revolute Gazebo joints.
-      for (size_t axis_index = 0; axis_index < 2; ++axis_index)
-        drive_effort_[axis_index] =
-            pitch_kp_[axis_index] *
-                (reference_position_[axis_index] - joint_state(axis_index)) +
-            pitch_kd_[axis_index] * (reference_velocity_[axis_index] -
-                                     joint_state(axis_index, true));
-      // 3. The single ML reference produces separate slide position/velocity
-      // targets: y_i = h_i * tan(ML), ydot_i = h_i * sec(ML)^2 * MLdot.
-      double ml_tangent = std::tan(reference_position_[2]);
-      for (size_t axis_index = 0; axis_index < 2; ++axis_index) {
-        drive_effort_[axis_index + 2] =
-            lateral_kp_ * (ml_heights_[axis_index] * ml_tangent -
-                           joint_state(axis_index + 2)) +
+      // Steps 0 / 0.5 / 1 live in ReferenceMapping::update:
+      // validate/integrate native commands once, convert with f^-1 and J, and
+      // recheck both coordinate systems. Failure leaves references unchanged.
+      if (reference_mapping_.update(
+              command_mode_, commands, step_seconds, reference_position_,
+              reference_velocity_, physical_reference_position_,
+              physical_reference_velocity_) != kin::Error::None)
+        throw std::domain_error("Invalid or out-of-bounds mapped reference");
+
+      // 2. Pitch servos consume independent angular targets. Actuator modes
+      // supplied these through the nonlinear inverse; reduced physics is
+      // intact.
+      for (const auto axis : {kin::FramePitch, kin::FootPitch}) {
+        const auto joint = PhysicalForAxis[axis];
+        drive_effort_[joint] =
+            pitch_kp_[joint] *
+                (physical_reference_position_[axis] - joint_state(joint)) +
+            pitch_kd_[joint] *
+                (physical_reference_velocity_[axis] - joint_state(joint, true));
+      }
+      // 3. Slide servos always consume PHYSICAL slide coordinates, not strokes.
+      // Angular mode expands ML; actuator mode preserves each independent slide
+      // and the canonical stroke sign (currently both lateral ratios are -1).
+      for (const auto axis : {kin::TorsoLateral, kin::HipLateral}) {
+        const auto joint = PhysicalForAxis[axis];
+        drive_effort_[joint] =
+            lateral_kp_ *
+                (physical_reference_position_[axis] - joint_state(joint)) +
             lateral_kd_ *
-                (ml_heights_[axis_index] * (1 + ml_tangent * ml_tangent) *
-                     reference_velocity_[2] -
-                 joint_state(axis_index + 2, true));
+                (physical_reference_velocity_[axis] - joint_state(joint, true));
       }
       // 4. Limit actuator effort, add reduced pitch dynamics, then write all
       // four physical commands to the entity-component manager for physics.

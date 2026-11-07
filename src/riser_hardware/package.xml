@@ -6,6 +6,7 @@
   <maintainer email="maintainer@example.com">RISER maintainers</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>riser_kinematics</depend>
   <depend>hardware_interface</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
