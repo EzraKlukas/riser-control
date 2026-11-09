@@ -19,6 +19,7 @@
   <exec_depend>joint_trajectory_controller</exec_depend>
   <exec_depend>riser_hardware</exec_depend>
   <exec_depend>riser_gazebo</exec_depend>
+  <exec_depend>riser_calibration</exec_depend>
   <exec_depend>riser_subject_simulation</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

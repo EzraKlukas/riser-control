@@ -19,6 +19,9 @@ import xacro
 def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
     mode = LaunchConfiguration("command_mode").perform(context)
+    calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
+    if calibrate and (backend != "gazebo" or mode != "actuator_position"):
+        raise ValueError("Calibration requires backend:=gazebo command_mode:=actuator_position")
     if mode.startswith("actuator_") and backend != "gazebo":
         raise ValueError("Actuator command modes currently require the Gazebo backend")
     share = Path(get_package_share_directory("riser_bringup"))
@@ -118,7 +121,7 @@ def setup(context):
             )
         )
     controller_mode = mode.removeprefix("angular_")
-    chosen = f"riser_{controller_mode}_controller"
+    chosen = "calibration_controller" if calibrate else f"riser_{controller_mode}_controller"
     for name in ["joint_state_broadcaster", chosen]:
         args = [
             name,
@@ -166,6 +169,9 @@ def generate_launch_description():
                 "headless", default_value="false", choices=["true", "false"]
             ),
             DeclareLaunchArgument("force_plate_rate", default_value="500"),
+            DeclareLaunchArgument(
+                "calibrate", default_value="false", choices=["true", "false"]
+            ),
             DeclareLaunchArgument(
                 "backend", default_value="mock", choices=["mock", "gazebo", "ethercat"]
             ),

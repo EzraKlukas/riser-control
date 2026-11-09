@@ -11,6 +11,8 @@ controller_manager:
       type: joint_trajectory_controller/JointTrajectoryController
     riser_velocity_controller:
       type: forward_command_controller/ForwardCommandController
+    calibration_controller:
+      type: riser_calibration/CalibrationController
 riser_position_controller:
   ros__parameters:
     joints: [backboard_pitch, foot_plate_pitch, ml_angle]
@@ -34,3 +36,10 @@ riser_actuator_velocity_controller:
   ros__parameters:
     joints: [top_actuator, torso_actuator, hip_actuator, bottom_actuator]
     interface_name: velocity
+
+calibration_controller:
+  ros__parameters:
+    # Fixed order: top, torso, hip, bottom. Bounds match model/kinematics.yaml.
+    lower_limits: [-0.335, -0.335, -0.335, -0.08]
+    upper_limits: [0.335, 0.335, 0.335, 0.24]
+    speeds: [0.01, 0.01, 0.01, 0.005]  # m/s position ramps

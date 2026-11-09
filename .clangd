@@ -12,3 +12,8 @@ If:
   PathMatch: src/riser_hardware/.*
 CompileFlags:
   CompilationDatabase: build/riser_hardware
+---
+If:
+  PathMatch: src/riser_calibration/.*
+CompileFlags:
+  CompilationDatabase: build/riser_calibration

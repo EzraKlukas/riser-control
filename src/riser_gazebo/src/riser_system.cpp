@@ -62,6 +62,9 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   std::array<double, kAngularInterfaceCount> angular_velocity_command_{};
   std::array<double, kLinearInterfaceCount> actuator_position_command_{};
   std::array<double, kLinearInterfaceCount> actuator_velocity_command_{};
+  std::array<double, kLinearInterfaceCount> limit_switch_lower_{},
+      limit_switch_upper_{};
+  double limit_switch_offset_ = 0.003; // metres inside each hard stop
   std::array<double, kPublicJointCount> position_lower_limits_{},
       position_upper_limits_{}, velocity_limits_{};
   std::array<double, 4>
@@ -279,6 +282,9 @@ public:
           !std::isfinite(lateral_force_limit_) || lateral_force_limit_ <= 0)
         throw std::runtime_error("Invalid lateral servo gains");
       // Angular and actuator limits come from Xacro, in rad and m respectively.
+      const auto switch_offset = hardware_info.hardware_parameters.find("limit_switch_offset");
+      if (switch_offset != hardware_info.hardware_parameters.end())
+        limit_switch_offset_ = std::stod(switch_offset->second);
       if (hardware_info.joints.size() != kPublicJointCount)
         throw std::runtime_error("Exactly seven public joints required");
       for (size_t axis_index = 0; axis_index < kPublicJointCount;
@@ -298,6 +304,11 @@ public:
             std::stod(joint->parameters.at("velocity_limit"));
       }
       Limits limits{};
+      for (const auto joint : PublicForAxis)
+        if (!std::isfinite(limit_switch_offset_) || limit_switch_offset_ < 0 ||
+            2 * limit_switch_offset_ >=
+                position_upper_limits_[joint] - position_lower_limits_[joint])
+          throw std::runtime_error("Invalid limit-switch offset");
       for (std::size_t i = 0; i < PublicJointCount; ++i)
         limits[i] = {position_lower_limits_[i], position_upper_limits_[i],
                      velocity_limits_[i]};
@@ -359,6 +370,13 @@ public:
       interfaces.emplace_back(public_joint_names_[joint_index], "effort",
                               &effort_[joint_index]);
     }
+    for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+      const auto &name = public_joint_names_[PublicForAxis[axis]];
+      interfaces.emplace_back(name, "limit_switch_lower",
+                              &limit_switch_lower_[axis]);
+      interfaces.emplace_back(name, "limit_switch_upper",
+                              &limit_switch_upper_[axis]);
+    }
     return interfaces;
   }
   // Both types are registered; write() consumes only the startup-selected
@@ -406,6 +424,19 @@ public:
       if (reference_mapping_.observe(q, qdot, position_, velocity_,
                                      measured_jacobian_) != kin::Error::None)
         throw std::runtime_error("Invalid measured actuator/ML state");
+      // Publish switches only in read(): the wrapper then updates controllers
+      // before the next write can enforce them. Include contact overshoot and
+      // mapping roundoff rather than requiring exact floating-point equality.
+      constexpr double switch_tolerance = 1e-10; // metres
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+        const auto joint = PublicForAxis[axis];
+        limit_switch_lower_[axis] =
+            position_[joint] <= position_lower_limits_[joint] +
+                                    limit_switch_offset_ + switch_tolerance;
+        limit_switch_upper_[axis] =
+            position_[joint] >= position_upper_limits_[joint] -
+                                    limit_switch_offset_ - switch_tolerance;
+      }
       physical_position_ = q;
       physical_velocity_ = qdot;
       effort_[Backboard] = drive_effort_[BackboardJoint];
@@ -497,11 +528,29 @@ public:
       // Steps 0 / 0.5 / 1 live in ReferenceMapping::update:
       // validate/integrate native commands once, convert with f^-1 and J, and
       // recheck both coordinate systems. Failure leaves references unchanged.
+      auto next_position = reference_position_;
+      auto next_velocity = reference_velocity_;
+      auto next_physical = physical_reference_position_;
+      auto next_physical_velocity = physical_reference_velocity_;
       if (reference_mapping_.update(
-              command_mode_, commands, step_seconds, reference_position_,
-              reference_velocity_, physical_reference_position_,
-              physical_reference_velocity_) != kin::Error::None)
+              command_mode_, commands, step_seconds, next_position,
+              next_velocity, next_physical, next_physical_velocity) !=
+          kin::Error::None)
         throw std::domain_error("Invalid or out-of-bounds mapped reference");
+
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+        const auto joint = PublicForAxis[axis];
+        const double advance = next_position[joint] - reference_position_[joint];
+        constexpr double tolerance = 1e-10; // metres; mapping roundoff only
+        if ((limit_switch_lower_[axis] && advance < -tolerance) ||
+            (limit_switch_upper_[axis] && advance > tolerance))
+          throw std::domain_error(public_joint_names_[joint] +
+                                  " reference advances into active limit switch");
+      }
+      reference_position_ = next_position;
+      reference_velocity_ = next_velocity;
+      physical_reference_position_ = next_physical;
+      physical_reference_velocity_ = next_physical_velocity;
 
       // 2. Pitch servos consume independent angular targets. Actuator modes
       // supplied these through the nonlinear inverse; reduced physics is

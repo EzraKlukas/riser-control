@@ -57,6 +57,52 @@ same order, in rad/s. Send zeros to stop velocity commands. State feedback expos
 position, velocity and effort; `/riser/physical_joint_states` gives the actual
 pitch and lateral-slide states used for TF.
 
+## Actuator homing in Gazebo
+
+Build and source the workspace, then launch the calibration controller instead
+of the normal motion controller:
+
+```bash
+ros2 launch riser_bringup control.launch.py backend:=gazebo \
+  command_mode:=actuator_position calibrate:=true plot:=false wrench_input:=false
+```
+
+Add `headless:=true` to run without the GUI. The controller visits the lower
+switch, upper switch, then home for top, torso, hip and bottom in that order.
+Home is halfway between measured switch positions for the first three axes and
+one quarter of the stroke from the lower switch for the bottom axis. Logs report
+each switch and when home is commanded. Home completion checks the **command**;
+that position stays applied while the next actuator calibrates and after the
+sequence finishes. It does not certify that physical motion has settled.
+Simulated switches sit 3 mm inside the hard stops to accommodate servo tracking
+error. Home is calculated from those measured switch positions, so it can differ
+slightly from the geometric zero (including about 1.5 mm for the bottom target).
+
+`calibration_controller` in `src/riser_bringup/config/controllers.yaml` sets
+position-ramp speeds in m/s and target bounds in m, in that same actuator order.
+Keep those bounds consistent with `src/riser_bringup/urdf/model/kinematics.yaml`.
+Targets are clamped to those bounds while waiting for switches; each phase has
+a 180-second simulation-time timeout. A missing switch stops the sequence and
+leaves the last position commands applied. Reactivating restarts calibration.
+The default sequence takes roughly nine simulated minutes.
+
+If Gazebo is already running in `actuator_position` mode, stop its normal
+controller before activating calibration:
+
+```bash
+ros2 control load_controller --set-state inactive calibration_controller
+ros2 control switch_controllers --strict \
+  --deactivate riser_actuator_position_controller --activate calibration_controller
+```
+
+Runtime hardware command-mode switching is not implemented; calibration requires
+starting with `actuator_position`. Interface names are resolved and checked at
+activation, so update logic does not depend on the order of loaned interfaces.
+The update loop uses fixed storage and the supplied simulation period; milestone
+and failure logging can block, so this is not a hard realtime hardware controller.
+See the [controller registration guide](src/riser_bringup/config/README.md#registering-a-controller)
+for the package, YAML and launch steps to add future controllers.
+
 ## Force plates and model details
 
 The left and right `geometry_msgs/msg/WrenchStamped` topics are

@@ -60,6 +60,44 @@ Activation seeds targets from measured state and zeros velocity commands. If
 activation precedes the first valid Gazebo state, seeding is deferred to the first
 write with valid state. A backward simulation-clock jump also reseeds references.
 
+## Simulated actuator limit switches
+
+Each of `top_actuator`, `torso_actuator`, `hip_actuator` and `bottom_actuator`
+exports `limit_switch_lower` and `limit_switch_upper` state interfaces, with
+`1.0` meaning hit and `0.0` meaning clear. Controllers can claim, for example,
+`torso_actuator/limit_switch_lower`. No switches are added to the angular
+resources, and no URDF changes are needed for these additional Humble interfaces.
+
+Switches use measured neutral-relative actuator stroke, 3 mm inside each existing
+lower/upper hard stop, including overshoot and a 1e-10 m roundoff tolerance.
+The optional hardware parameter `limit_switch_offset` sets this inset in metres
+(default `0.003`; `0` restores exact-boundary switches). This allows position
+servos with gravity/tracking error to reach the switches within their reference
+bounds. The existing PD servos need a nonzero position error to hold residual
+gravity torque; in a trial, top stroke settled about 0.20 mm and bottom stroke about 2.62 mm short of
+their respective limit targets.
+Set the inset with a `<param name="limit_switch_offset">...</param>` inside the
+Gazebo hardware block in `riser_bringup/urdf/backends.xacro`.
+Beyond a physical stop, measurement mapping extends the endpoint tangent (exact
+for the linear slides, approximate for pitch actuators) so Gazebo contact overshoot
+does not hide the switch behind a mapping error. Reference bounds remain strict.
+
+The Gazebo wrapper calls hardware `read()` followed by controller `update()` in
+PostUpdate; subsequent physics-step writes enforce the reported switches.
+There is no assumed wall-clock reaction delay. Holding the previous reference or
+moving away is allowed, including while a switch remains hit. Only advancing an
+actuator reference farther into a reported switch (by more than 1e-10 m per
+write) zeros all drive efforts and returns the existing hardware write error.
+This applies to both command families through their mapped actuator references.
+Velocity references already clamped at an endpoint do not advance and are allowed.
+Out-of-bounds position commands still fail the existing reference checks.
+
+A homing controller can therefore approach within the configured travel, read
+the switch and hold or reverse in that update without faulting. Switches are
+sampled at the controller read rate; these are simulated contacts, not a hardware
+safety interlock. The added checks use fixed-size storage and no blocking IO;
+the existing error path still logs and uses exceptions.
+
 ## Neutral-relative bounds and CAD dynamics
 
 `riser_bringup/urdf/model/kinematics.yaml` supplies the operational neutral,

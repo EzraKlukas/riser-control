@@ -88,6 +88,7 @@ public:
       if (!std::isfinite(neutral_cad[i]))
         return kin::Error::InvalidConfiguration;
       const auto domain = domains[i];
+      physical_domains_[i] = domain;
       const auto error =
           axes_[i].configure(geometry[i], {domain.lower + neutral_cad[i],
                                            domain.upper + neutral_cad[i]});
@@ -120,10 +121,20 @@ public:
     v[Backboard] = qdot[kin::FramePitch];
     v[FootPlate] = qdot[kin::FootPitch];
     for (std::size_t i = 0; i < ActuatorCount; ++i) {
-      const auto mapped = axes_[i].forward(q[i] + neutral_cad_[i], qdot[i]);
+      if (!std::isfinite(q[i]))
+        return kin::Error::NonfiniteInput;
+      // Contact solvers can overshoot a physical stop. For measurement only,
+      // extend the endpoint tangent so switches remain observable there.
+      // Reference conversion below retains its strict mechanical bounds.
+      const double bounded_q = std::clamp(q[i], physical_domains_[i].lower,
+                                         physical_domains_[i].upper);
+      const auto mapped = axes_[i].forward(bounded_q + neutral_cad_[i], qdot[i]);
       if (!mapped)
         return mapped.error;
-      p[PublicForAxis[i]] = mapped.position - neutral_stroke_[i];
+      p[PublicForAxis[i]] = mapped.position - neutral_stroke_[i] +
+                            mapped.jacobian * (q[i] - bounded_q);
+      if (!std::isfinite(p[PublicForAxis[i]]))
+        return kin::Error::NonfiniteInput;
       v[PublicForAxis[i]] = mapped.velocity;
       J[i] = mapped.jacobian;
     }
@@ -249,6 +260,7 @@ private:
   }
   Limits limits_{};
   std::array<kin::Axis, 4> axes_{};
+  std::array<kin::Domain, 4> physical_domains_{};
   kin::Coordinates neutral_cad_{}, neutral_stroke_{};
   kin::LateralCoupling ml_;
   bool ready_ = false;
