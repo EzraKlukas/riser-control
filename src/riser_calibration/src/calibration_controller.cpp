@@ -1,11 +1,16 @@
 #include "riser_calibration/calibration_controller.hpp"
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace riser_calibration_controller {
 using Callback = controller_interface::CallbackReturn;
 using Result = controller_interface::return_type;
+
+static double read_state(const hardware_interface::LoanedStateInterface &state) {
+  return state.get_optional().value_or(std::numeric_limits<double>::quiet_NaN());
+}
 
 // Resolve names once at activation; update() uses readable, checked handles.
 template <class Interfaces>
@@ -40,7 +45,7 @@ Callback CalibrationController::on_init() {
   try {
     auto_declare<std::vector<double>>("lower_limits", {});
     auto_declare<std::vector<double>>("upper_limits", {});
-    auto_declare<std::vector<double>>("speeds", {0.01, 0.01, 0.01, 0.005});
+    auto_declare<std::vector<double>>("speeds", {0.3, 0.3, 0.3, 0.15});
     return Callback::SUCCESS;
   } catch (const std::exception &e) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", e.what());
@@ -86,14 +91,15 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
                    name.c_str());
       return Callback::ERROR;
     }
-    if (!std::isfinite(a.position->get_value()))
+    if (!std::isfinite(read_state(*a.position)))
       return Callback::ERROR;
-    a.target = std::clamp(a.position->get_value(), a.lower, a.upper);
+    a.target = std::clamp(read_state(*a.position), a.lower, a.upper);
     a.state = FINDING_NEG_LIMIT;
   }
   for (auto &a : actuators_)
     if (!a.command->set_value(a.target)) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Could not write calibration hold target");
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "Could not write calibration hold target");
       return Callback::ERROR;
     }
   current_actuator_ = 0;
@@ -106,7 +112,8 @@ Callback CalibrationController::on_deactivate(const rclcpp_lifecycle::State &) {
   // Position commands hold the last valid targets; zero would request motion.
   for (auto &a : actuators_)
     if (!a.command->set_value(a.target)) {
-      RCLCPP_ERROR(get_node()->get_logger(), "Could not write calibration hold target");
+      RCLCPP_ERROR(get_node()->get_logger(),
+                   "Could not write calibration hold target");
       return Callback::ERROR;
     }
   return Callback::SUCCESS;
@@ -127,9 +134,9 @@ Result CalibrationController::update(const rclcpp::Time &,
   if (!std::isfinite(dt) || dt < 0)
     return fail("invalid update period");
   for (const auto &a : actuators_) {
-    const double lower = a.lower_switch->get_value(),
-                 upper = a.upper_switch->get_value();
-    if (!std::isfinite(a.position->get_value()) || (lower != 0 && lower != 1) ||
+    const double lower = read_state(*a.lower_switch),
+                 upper = read_state(*a.upper_switch);
+    if (!std::isfinite(read_state(*a.position)) || (lower != 0 && lower != 1) ||
         (upper != 0 && upper != 1) || (lower && upper))
       return fail("invalid position or limit-switch state");
   }
@@ -142,8 +149,8 @@ Result CalibrationController::update(const rclcpp::Time &,
   const double step = a.speed * dt;
   switch (a.state) {
   case FINDING_NEG_LIMIT:
-    if (a.lower_switch->get_value()) {
-      a.lower_position = a.position->get_value();
+    if (read_state(*a.lower_switch)) {
+      a.lower_position = read_state(*a.position);
       a.state = FINDING_POS_LIMIT;
       phase_seconds_ = 0;
       RCLCPP_INFO(get_node()->get_logger(), "%s: lower limit %.6f m",
@@ -153,8 +160,8 @@ Result CalibrationController::update(const rclcpp::Time &,
     }
     break;
   case FINDING_POS_LIMIT:
-    if (a.upper_switch->get_value()) {
-      a.upper_position = a.position->get_value();
+    if (read_state(*a.upper_switch)) {
+      a.upper_position = read_state(*a.position);
       if (a.upper_position <= a.lower_position)
         return fail("upper limit is not above lower limit");
       // Bottom neutral is one quarter of its stroke; the other axes are

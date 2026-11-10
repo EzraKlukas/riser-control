@@ -33,6 +33,21 @@
     <param name="${prefix}_pitch_max_torque">${c['direct_pitch'][prefix]['max_torque_Nm']}</param>
   </xacro:macro>
 
+  <xacro:macro name="force_plate_state" params="name side">
+    <sensor name="${name}">
+      <param name="gz_topic">/riser/force_plates/${side}/raw</param>
+      <param name="sample_timeout">0.1</param>
+      <state_interface name="force.x" />
+      <state_interface name="force.y" />
+      <state_interface name="force.z" />
+      <state_interface name="torque.x" />
+      <state_interface name="torque.y" />
+      <state_interface name="torque.z" />
+      <state_interface name="sample_time" />
+      <state_interface name="valid" />
+    </sensor>
+  </xacro:macro>
+
   <xacro:macro name="riser_backend" params="backend controllers_file command_mode">
     <xacro:if value="${backend != 'none'}">
       <ros2_control name="RiserSystem" type="system">
@@ -69,6 +84,10 @@
             upper="${c['ml']['limit_rad']}"
             velocity="${c['ml']['velocity_rad_s']}"
             mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
+        <xacro:if value="${backend == 'gazebo'}">
+          <xacro:force_plate_state name="left_force_plate" side="left" />
+          <xacro:force_plate_state name="right_force_plate" side="right" />
+        </xacro:if>
         <!-- Virtual actuator resources belong to the custom Gazebo adapter.
              Mock/EtherCAT retain their existing three-coordinate contract. -->
         <xacro:if value="${backend == 'gazebo'}">

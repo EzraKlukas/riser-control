@@ -114,6 +114,14 @@ plate. Readings include plate weight and inertia. Sensor timestamps use simulati
 time; plate motion requires compensation before interpreting readings as subject
 forces.
 
+Controllers can also claim `left_force_plate/force.x` through
+`left_force_plate/torque.z`, and the corresponding `right_force_plate` state
+interfaces. Each sensor exposes `sample_time` (simulation seconds) and `valid`
+(1 for a finite sample no older than its configured `sample_timeout`, otherwise
+0). Unavailable force/torque values are NaN. These readings retain the same
+surface origins, axes and units as the topics; no wrench transformation is
+applied. See the [Gazebo interface reference](src/riser_gazebo/README.md#force-plate-state-interfaces).
+
 Physics uses a 1 ms step, the controller is configured for 1000 Hz, and each
 force sensor defaults to 500 Hz (`force_plate_rate:=...`). These are simulation
 settings; wall-clock throughput and ROS delivery depend on rendering, contacts

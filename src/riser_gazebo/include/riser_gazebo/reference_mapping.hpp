@@ -1,8 +1,7 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
-#include <cmath>
+#include <array> #include <cmath>
 #include <riser_kinematics/lateral.hpp>
 
 namespace riser_gazebo {
@@ -127,8 +126,9 @@ public:
       // extend the endpoint tangent so switches remain observable there.
       // Reference conversion below retains its strict mechanical bounds.
       const double bounded_q = std::clamp(q[i], physical_domains_[i].lower,
-                                         physical_domains_[i].upper);
-      const auto mapped = axes_[i].forward(bounded_q + neutral_cad_[i], qdot[i]);
+                                          physical_domains_[i].upper);
+      const auto mapped =
+          axes_[i].forward(bounded_q + neutral_cad_[i], qdot[i]);
       if (!mapped)
         return mapped.error;
       p[PublicForAxis[i]] = mapped.position - neutral_stroke_[i] +

@@ -34,6 +34,8 @@ def test_angular_interfaces_and_shared_geometry():
                 assert [j.get("name") for j in control.findall("joint")] == expected
                 expected_gpios = ["top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"] if backend == "gazebo" else []
                 assert [g.get("name") for g in control.findall("gpio")] == expected_gpios
+                expected_sensors = ["left_force_plate", "right_force_plate"] if backend == "gazebo" else []
+                assert [s.get("name") for s in control.findall("sensor")] == expected_sensors
                 for name in expected_gpios:
                     assert root.find(f"joint[@name='{name}']") is None
                 for j in control.findall("joint") + control.findall("gpio"):
@@ -71,6 +73,14 @@ def test_independent_sensing_paths_and_contact_geometry():
         assert gz.find("sensor/pose").text == "0 0 0 0 0 0"
         assert gz.find("sensor/force_torque/frame").text == "sensor"
         assert root.find("link[@name='%s']/collision" % name) is not None
+        sensor = root.find(f"ros2_control/sensor[@name='{name}']")
+        assert sensor.find("command_interface") is None
+        assert [s.get("name") for s in sensor.findall("state_interface")] == [
+            "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z",
+            "sample_time", "valid",
+        ]
+        assert sensor.find("param[@name='gz_topic']").text == gz.find("sensor/topic").text
+        assert float(sensor.find("param[@name='sample_timeout']").text) > 0
 
 
 def test_direct_pitch_model():

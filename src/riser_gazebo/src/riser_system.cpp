@@ -1,16 +1,17 @@
 // Direct physical pitch torques with removed
 // stage/rod dynamics reduced onto pitch.
 // No physical pitch-joint position/velocity resets are used.
+#include "riser_gazebo/force_plate_state.hpp"
 #include "riser_gazebo/reference_mapping.hpp"
 #include <algorithm>
 #include <array>
 #include <cmath>
-#include <gz_ros2_control/gz_system_interface.hpp>
-#include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <gz/sim/components/JointForceCmd.hh>
 #include <gz/sim/components/JointPosition.hh>
 #include <gz/sim/components/JointVelocity.hh>
-#include <limits>
+#include <gz/transport/Node.hh>
+#include <gz_ros2_control/gz_system_interface.hpp>
+#include <hardware_interface/types/hardware_interface_type_values.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
 #include <sstream>
@@ -149,6 +150,13 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   CommandMode command_mode_ = CommandMode::None;
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
 
+  const std::array<std::string, 2> force_plate_names_{"left_force_plate",
+                                                      "right_force_plate"};
+  std::array<std::shared_ptr<ForcePlateState>, 2> force_plates_{
+      std::make_shared<ForcePlateState>(), std::make_shared<ForcePlateState>()};
+  std::array<double, 2> force_plate_timeouts_{};
+  gz::transport::Node force_plate_transport_;
+
   double
   hardware_parameter(const hardware_interface::HardwareInfo &hardware_info,
                      const std::string &parameter_name) {
@@ -206,7 +214,9 @@ public:
                std::map<std::string, sim::Entity> &gazebo_joints,
                const hardware_interface::HardwareInfo &hardware_info,
                sim::EntityComponentManager &ecm, unsigned int) override {
-    if (hardware_interface::SystemInterface::on_init(hardware_info) !=
+    hardware_interface::HardwareComponentInterfaceParams params;
+    params.hardware_info = hardware_info;
+    if (hardware_interface::SystemInterface::on_init(params) !=
         hardware_interface::CallbackReturn::SUCCESS)
       return false;
     nh_ = node;
@@ -216,6 +226,36 @@ public:
           str_to_cmd_mode(hardware_info.hardware_parameters.at("command_mode"));
       if (command_mode_ == CommandMode::None)
         throw std::runtime_error("Unsupported command mode");
+      if (hardware_info.sensors.size() != force_plates_.size())
+        throw std::runtime_error("Exactly two force-plate sensors required");
+      for (std::size_t i = 0; i < force_plates_.size(); ++i) {
+        const auto sensor =
+            std::find_if(hardware_info.sensors.begin(),
+                         hardware_info.sensors.end(), [&](const auto &entry) {
+                           return entry.name == force_plate_names_[i];
+                         });
+        if (sensor == hardware_info.sensors.end() ||
+            !sensor->command_interfaces.empty() ||
+            sensor->state_interfaces.size() !=
+                ForcePlateState::InterfaceNames.size())
+          throw std::runtime_error("Invalid force-plate sensor declaration");
+        for (std::size_t j = 0; j < ForcePlateState::InterfaceNames.size(); ++j)
+          if (sensor->state_interfaces[j].name !=
+              ForcePlateState::InterfaceNames[j])
+            throw std::runtime_error("Invalid force-plate state interface");
+        force_plate_timeouts_[i] =
+            std::stod(sensor->parameters.at("sample_timeout"));
+        if (!std::isfinite(force_plate_timeouts_[i]) ||
+            force_plate_timeouts_[i] <= 0)
+          throw std::runtime_error("Invalid force-plate sample timeout");
+        // Capture the cache by ownership: callbacks cannot outlive its storage.
+        if (!force_plate_transport_.Subscribe<gz::msgs::Wrench>(
+                sensor->parameters.at("gz_topic"),
+                [state = force_plates_[i]](const gz::msgs::Wrench &message) {
+                  state->receive(message);
+                }))
+          throw std::runtime_error("Could not subscribe to force-plate sensor");
+      }
       // Resolve all four physical Gazebo joints, including the two slides
       // whose actuator resources are separately exported below.
       for (size_t axis_index = 0; axis_index < physical_count_; ++axis_index) {
@@ -282,19 +322,21 @@ public:
           !std::isfinite(lateral_force_limit_) || lateral_force_limit_ <= 0)
         throw std::runtime_error("Invalid lateral servo gains");
       // Angular and actuator limits come from Xacro, in rad and m respectively.
-      const auto switch_offset = hardware_info.hardware_parameters.find("limit_switch_offset");
+      const auto switch_offset =
+          hardware_info.hardware_parameters.find("limit_switch_offset");
       if (switch_offset != hardware_info.hardware_parameters.end())
         limit_switch_offset_ = std::stod(switch_offset->second);
       if (hardware_info.joints.size() != kAngularInterfaceCount ||
           hardware_info.gpios.size() != kLinearInterfaceCount)
-        throw std::runtime_error("Exactly three angular joints and four actuator GPIOs required");
+        throw std::runtime_error(
+            "Exactly three angular joints and four actuator GPIOs required");
       for (size_t axis_index = 0; axis_index < kPublicJointCount;
            ++axis_index) {
         const auto &resources = axis_index < kAngularInterfaceCount
                                     ? hardware_info.joints
                                     : hardware_info.gpios;
-        auto joint =
-            std::find_if(resources.begin(), resources.end(), [&](const auto &joint) {
+        auto joint = std::find_if(
+            resources.begin(), resources.end(), [&](const auto &joint) {
               return joint.name == public_joint_names_[axis_index];
             });
         if (joint == resources.end())
@@ -380,6 +422,11 @@ public:
       interfaces.emplace_back(name, "limit_switch_upper",
                               &limit_switch_upper_[axis]);
     }
+    for (std::size_t i = 0; i < force_plates_.size(); ++i)
+      for (std::size_t j = 0; j < ForcePlateState::InterfaceNames.size(); ++j)
+        interfaces.emplace_back(force_plate_names_[i],
+                                ForcePlateState::InterfaceNames[j],
+                                &force_plates_[i]->values()[j]);
     return interfaces;
   }
   // Both types are registered; write() consumes only the startup-selected
@@ -416,6 +463,8 @@ public:
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   ReturnType read(const rclcpp::Time &now, const rclcpp::Duration &) override {
+    for (std::size_t i = 0; i < force_plates_.size(); ++i)
+      force_plates_[i]->read(now.nanoseconds(), force_plate_timeouts_[i]);
     try {
       kin::Coordinates q{}, qdot{};
       for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
@@ -535,20 +584,21 @@ public:
       auto next_velocity = reference_velocity_;
       auto next_physical = physical_reference_position_;
       auto next_physical_velocity = physical_reference_velocity_;
-      if (reference_mapping_.update(
-              command_mode_, commands, step_seconds, next_position,
-              next_velocity, next_physical, next_physical_velocity) !=
-          kin::Error::None)
+      if (reference_mapping_.update(command_mode_, commands, step_seconds,
+                                    next_position, next_velocity, next_physical,
+                                    next_physical_velocity) != kin::Error::None)
         throw std::domain_error("Invalid or out-of-bounds mapped reference");
 
       for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
         const auto joint = PublicForAxis[axis];
-        const double advance = next_position[joint] - reference_position_[joint];
+        const double advance =
+            next_position[joint] - reference_position_[joint];
         constexpr double tolerance = 1e-10; // metres; mapping roundoff only
         if ((limit_switch_lower_[axis] && advance < -tolerance) ||
             (limit_switch_upper_[axis] && advance > tolerance))
-          throw std::domain_error(public_joint_names_[joint] +
-                                  " reference advances into active limit switch");
+          throw std::domain_error(
+              public_joint_names_[joint] +
+              " reference advances into active limit switch");
       }
       reference_position_ = next_position;
       reference_velocity_ = next_velocity;

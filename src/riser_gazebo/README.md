@@ -68,7 +68,8 @@ exports `limit_switch_lower` and `limit_switch_upper` state interfaces, with
 `torso_actuator/limit_switch_lower`. No switches are added to the angular
 resources. The four virtual actuators are declared as ros2_control GPIOs;
 limits are read from `HardwareInfo::gpios`. The adapter exports all fourteen
-command and twenty-nine state handles, including eight switch handles.
+command handles and twenty-nine motion/switch state handles, including eight
+switch handles. Force-plate sensor states are exported separately below.
 `joint_state_broadcaster.use_urdf_to_filter: false` retains actuator feedback on
 `/joint_states` despite the absence of physical actuator joints.
 
@@ -101,6 +102,37 @@ the switch and hold or reverse in that update without faulting. Switches are
 sampled at the controller read rate; these are simulated contacts, not a hardware
 safety interlock. The added checks use fixed-size storage and no blocking IO;
 the existing error path still logs and uses exceptions.
+
+## Force-plate state interfaces
+
+The Gazebo backend declares `left_force_plate` and `right_force_plate` as
+ros2_control sensors. Each exports `force.x`, `force.y`, `force.z`, `torque.x`,
+`torque.y`, `torque.z`, `sample_time` and `valid`; for example, a controller can
+claim `left_force_plate/force.z`. There are 45 state handles in total and no
+additional command handles. Mock and EtherCAT resources are unchanged.
+
+Force and torque remain in N and N m, expressed at each plate's top-surface
+centre in its local axes, exactly as on the existing wrench topics. This
+adapter does not rotate, shift, combine or compensate the wrenches, and does
+not apply the physical transducer's factory-origin offsets.
+
+The adapter subscribes directly to each Gazebo sensor topic, so state feedback
+does not depend on the ROS bridge. Transport callbacks copy into fixed storage;
+`read()` attempts one nonblocking mutex acquisition per sensor and otherwise
+retains the last snapshot. Exported storage is updated only by `read()`.
+Sensor delivery is asynchronous: a 1000 Hz controller can reuse samples from
+the default 500 Hz sensors. There is no wall-clock delivery or synchronisation
+guarantee between the plates or joint feedback.
+
+`sample_time` is the original sensor timestamp in simulation seconds (NaN when
+absent). `valid` is 1 only for a complete finite sample dated no later than the
+current controller time and no older than `sample_timeout`. Before the first
+sample, on malformed data, after a clock reset leaving a future-dated sample,
+or after timeout, `valid` is 0 and all six wrench values are NaN. Missing sensor
+data does not disable motion control; consuming controllers must check validity,
+age and left/right timestamp skew before using the wrench for control. Set
+`sample_timeout` in each sensor declaration in `backends.xacro` (default 0.1 s
+of simulation time). A paused simulation does not advance sample age.
 
 ## Neutral-relative bounds and CAD dynamics
 
