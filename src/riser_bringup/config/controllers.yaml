@@ -13,6 +13,11 @@ controller_manager:
       type: forward_command_controller/ForwardCommandController
     calibration_controller:
       type: riser_calibration/CalibrationController
+joint_state_broadcaster:
+  ros__parameters:
+    # Actuator GPIOs have no URDF joints but must remain in /joint_states.
+    use_urdf_to_filter: false
+
 riser_position_controller:
   ros__parameters:
     joints: [backboard_pitch, foot_plate_pitch, ml_angle]

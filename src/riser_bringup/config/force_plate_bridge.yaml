@@ -1,7 +1,7 @@
 - ros_topic_name: /riser/force_plates/left/raw
   gz_topic_name: /riser/force_plates/left/raw
   ros_type_name: geometry_msgs/msg/WrenchStamped
-  gz_type_name: ignition.msgs.Wrench
+  gz_type_name: gz.msgs.Wrench
   direction: GZ_TO_ROS
   publisher_queue: 100
   subscriber_queue: 100
@@ -9,7 +9,7 @@
 - ros_topic_name: /riser/force_plates/right/raw
   gz_topic_name: /riser/force_plates/right/raw
   ros_type_name: geometry_msgs/msg/WrenchStamped
-  gz_type_name: ignition.msgs.Wrench
+  gz_type_name: gz.msgs.Wrench
   direction: GZ_TO_ROS
   publisher_queue: 100
   subscriber_queue: 100
@@ -17,5 +17,5 @@
 - ros_topic_name: /subject_simulation/wrench_input
   gz_topic_name: /riser/wrench_input
   ros_type_name: ros_gz_interfaces/msg/EntityWrench
-  gz_type_name: ignition.msgs.EntityWrench
+  gz_type_name: gz.msgs.EntityWrench
   direction: ROS_TO_GZ

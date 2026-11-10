@@ -7,8 +7,10 @@
   <maintainer email="ezraklukas@gmail.com">ezraklukas</maintainer>
   <license>TODO: License declaration</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <depend>ignition-gazebo6</depend>
-  <depend>ignition-plugin1</depend>
+  <depend>gz_sim_vendor</depend>
+  <depend>gz_plugin_vendor</depend>
+  <depend>gz_transport_vendor</depend>
+  <depend>gz_msgs_vendor</depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>python3-pyqt5</exec_depend>
   <exec_depend>ros_gz_interfaces</exec_depend>

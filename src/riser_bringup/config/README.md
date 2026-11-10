@@ -47,8 +47,9 @@ after implementing a controller plugin:
 4. In `launch/control.launch.py`, select its instance name for the existing
    controller-manager spawner. Calibration adds `calibrate:=true`, requires
    Gazebo's `actuator_position` mode, and selects `calibration_controller`
-   **instead of** the normal position controller. The spawner loads, configures
-   and activates the selected controller. Do not activate controllers with
+   instead of the normal position controller. Pass `controllers.yaml` to each
+   spawner with `--param-file` to load its parameters. The spawner loads,
+   configures and activates the selected controller. Do not activate controllers with
    competing command claims. This Gazebo adapter also consumes only its
    startup-selected command family, regardless of controller claims.
 
@@ -69,8 +70,8 @@ ros2 control list_controllers
 
 The last two commands require a running controller manager. See the
 [homing instructions](../../../README.md#actuator-homing-in-gazebo) for launch
-and strict controller-switch commands. Additional Gazebo switch state interfaces
-are exported by `riser_gazebo`; no bringup URDF changes were needed for them.
+and strict controller-switch commands. The Gazebo adapter exports lower and
+upper limit-switch state interfaces for all four actuators.
 
 Model geometry, kinematics, rigid-body properties and reduced pitch dynamics live
 in `../urdf/model`; plate properties are in `../urdf/riser.urdf.xacro`. Simulation
@@ -81,4 +82,4 @@ with `force_plate_rate:=...`.
 `columns`: angle, inertia, inertia derivative, gravity torque and damping.
 Keep the uniform angle grid and columns consistent when changing the table.
 Its inertial feedback uses acceleration delayed by one physics step. See
-[CAD model derivation](../../../../reports/model.md).
+[CAD model derivation](../../../reports/model.md).

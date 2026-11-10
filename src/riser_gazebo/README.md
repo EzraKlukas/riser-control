@@ -2,8 +2,8 @@
 
 `AngularSystem` keeps the reduced direct-pitch physics. Both command families
 ultimately provide two pitch-angle targets and two independent physical slide
-targets to the existing PD servos. This change adds reference conversion, not
-simulated pitch actuator bodies or encoder calibration.
+targets to the PD servos. Virtual actuator resources provide stroke references
+and feedback without adding physical pitch actuator bodies.
 
 ## The three index spaces
 
@@ -66,7 +66,11 @@ Each of `top_actuator`, `torso_actuator`, `hip_actuator` and `bottom_actuator`
 exports `limit_switch_lower` and `limit_switch_upper` state interfaces, with
 `1.0` meaning hit and `0.0` meaning clear. Controllers can claim, for example,
 `torso_actuator/limit_switch_lower`. No switches are added to the angular
-resources, and no URDF changes are needed for these additional Humble interfaces.
+resources. The four virtual actuators are declared as ros2_control GPIOs;
+limits are read from `HardwareInfo::gpios`. The adapter exports all fourteen
+command and twenty-nine state handles, including eight switch handles.
+`joint_state_broadcaster.use_urdf_to_filter: false` retains actuator feedback on
+`/joint_states` despite the absence of physical actuator joints.
 
 Switches use measured neutral-relative actuator stroke, 3 mm inside each existing
 lower/upper hard stop, including overshoot and a 1e-10 m roundoff tolerance.
@@ -178,7 +182,7 @@ uses exceptions/logging on errors; it is not a hard realtime hardware template.
 
 The [kinematics library tests](../riser_kinematics/README.md#integration-and-verification)
 check CAD geometry, mapping round trips and Python parity over the enlarged
-mechanical domains. Bringup tests check seven Gazebo resources/fourteen command
-handles, three resources for other backends, startup modes, neutral poses and
+mechanical domains. Bringup tests check three Gazebo joints plus four GPIOs/fourteen command
+handles, three joints for other backends, startup modes, neutral poses and
 derived limits. These checks do not substitute for a full ROS/Gazebo build and
 live trajectory trials.

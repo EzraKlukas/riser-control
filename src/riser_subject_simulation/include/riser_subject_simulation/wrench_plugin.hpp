@@ -4,22 +4,22 @@
 #include <memory>
 #include <mutex>
 
-#include <ignition/gazebo/System.hh>
-#include <ignition/gazebo/components/Link.hh>
-#include <ignition/gazebo/components/Model.hh>
-#include <ignition/gazebo/components/Name.hh>
-#include <ignition/gazebo/components/ParentEntity.hh>
-#include <ignition/msgs/boolean.pb.h>
-#include <ignition/msgs/entity_wrench.pb.h>
-#include <ignition/transport/Node.hh>
+#include <gz/sim/System.hh>
+#include <gz/sim/components/Link.hh>
+#include <gz/sim/components/Model.hh>
+#include <gz/sim/components/Name.hh>
+#include <gz/sim/components/ParentEntity.hh>
+#include <gz/msgs/boolean.pb.h>
+#include <gz/msgs/entity_wrench.pb.h>
+#include <gz/transport/Node.hh>
 
 struct Wrench {
-  ignition::math::Vector3d force_;
-  ignition::math::Vector3d torque_;
+  gz::math::Vector3d force_;
+  gz::math::Vector3d torque_;
 };
 
 namespace riser_subject_simulation {
-namespace sim = ignition::gazebo;
+namespace sim = gz::sim;
 
 class WorldWrench : public sim::System,
                     public sim::ISystemConfigure,
@@ -33,13 +33,13 @@ public:
                  sim::EntityComponentManager &ecm) override;
 
 private:
-  void on_wrench(const ignition::msgs::EntityWrench &msg);
+  void on_wrench(const gz::msgs::EntityWrench &msg);
   void resolve_target_link(sim::EntityComponentManager &ecm);
 
   sim::Entity left_link_ = sim::kNullEntity;
   sim::Entity right_link_ = sim::kNullEntity;
 
-  ignition::transport::Node node_;
+  gz::transport::Node node_;
 
   std::mutex command_mutex_;
   Wrench left_wrench_;

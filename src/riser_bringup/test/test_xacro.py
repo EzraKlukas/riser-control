@@ -31,10 +31,12 @@ def test_angular_interfaces_and_shared_geometry():
             else:
                 assert control.find("hardware/plugin").text == plugin
                 expected = ["backboard_pitch", "foot_plate_pitch", "ml_angle"]
-                if backend == "gazebo":
-                    expected += ["top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"]
                 assert [j.get("name") for j in control.findall("joint")] == expected
-                for j in control.findall("joint"):
+                expected_gpios = ["top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"] if backend == "gazebo" else []
+                assert [g.get("name") for g in control.findall("gpio")] == expected_gpios
+                for name in expected_gpios:
+                    assert root.find(f"joint[@name='{name}']") is None
+                for j in control.findall("joint") + control.findall("gpio"):
                     commands = ["position", "velocity"] if backend == "gazebo" else [mode]
                     assert [x.get("name") for x in j.findall("command_interface")] == commands
                     for parameter in ("lower", "upper", "velocity_limit"):
@@ -129,5 +131,12 @@ def test_gazebo_startup_modes(mode):
     root = E.fromstring(xacro.process_file(str(share / "urdf/riser.urdf.xacro"),
         mappings={"backend": "gazebo", "command_mode": mode}).toxml())
     assert root.find("ros2_control/hardware/param[@name='command_mode']").text == mode
-    assert len(root.findall("ros2_control/joint")) == 7
-    assert len(root.findall("ros2_control/joint/command_interface")) == 14
+    assert len(root.findall("ros2_control/joint")) == 3
+    assert len(root.findall("ros2_control/gpio")) == 4
+    resources = root.findall("ros2_control/joint") + root.findall("ros2_control/gpio")
+    assert sum(len(r.findall("command_interface")) for r in resources) == 14
+    k = json.loads((share / "urdf/model/kinematics.yaml").read_text())["joints"]
+    for gpio in root.findall("ros2_control/gpio"):
+        limits = k[gpio.get("name")]
+        for parameter, key in [("lower", "lower"), ("upper", "upper"), ("velocity_limit", "velocity")]:
+            assert float(gpio.find(f"param[@name='{parameter}']").text) == limits[key]

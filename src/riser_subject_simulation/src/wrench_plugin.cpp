@@ -1,11 +1,11 @@
 #include "riser_subject_simulation/wrench_plugin.hpp"
-#include <ignition/gazebo/Link.hh>
-#include <ignition/gazebo/components/Link.hh>
-#include <ignition/gazebo/components/Model.hh>
-#include <ignition/gazebo/components/Name.hh>
-#include <ignition/gazebo/components/ParentEntity.hh>
-#include <ignition/msgs/double.pb.h>
-#include <ignition/plugin/Register.hh>
+#include <gz/sim/Link.hh>
+#include <gz/sim/components/Link.hh>
+#include <gz/sim/components/Model.hh>
+#include <gz/sim/components/Name.hh>
+#include <gz/sim/components/ParentEntity.hh>
+#include <gz/msgs/double.pb.h>
+#include <gz/plugin/Register.hh>
 
 namespace riser_subject_simulation {
 void WorldWrench::Configure(const sim::Entity &,
@@ -29,30 +29,37 @@ void WorldWrench::PreUpdate(const sim::UpdateInfo &info,
     return;
   }
 
-  sim::Link(left_link_)
-      .AddWorldWrench(ecm, left_wrench_.force_, left_wrench_.torque_);
-  sim::Link(right_link_)
-      .AddWorldWrench(ecm, right_wrench_.force_, right_wrench_.torque_);
+  // Transport callbacks run on another thread. Copy under the mutex, then
+  // release it before touching physics; this is not a hard realtime path.
+  Wrench left, right;
+  {
+    std::lock_guard<std::mutex> lock(command_mutex_);
+    left = left_wrench_;
+    right = right_wrench_;
+  }
+  sim::Link(left_link_).AddWorldWrench(ecm, left.force_, left.torque_);
+  sim::Link(right_link_).AddWorldWrench(ecm, right.force_, right.torque_);
 }
 
-static Wrench msg_to_wrench(const ignition::msgs::EntityWrench &msg) {
+static Wrench msg_to_wrench(const gz::msgs::EntityWrench &msg) {
   Wrench wrench_;
-  wrench_.force_ = ignition::math::Vector3d(msg.wrench().force().x(),
+  wrench_.force_ = gz::math::Vector3d(msg.wrench().force().x(),
                                             msg.wrench().force().y(),
                                             msg.wrench().force().z());
-  wrench_.torque_ = ignition::math::Vector3d(msg.wrench().torque().x(),
+  wrench_.torque_ = gz::math::Vector3d(msg.wrench().torque().x(),
                                              msg.wrench().torque().y(),
                                              msg.wrench().torque().z());
   return wrench_;
 }
 
-void WorldWrench::on_wrench(const ignition::msgs::EntityWrench &msg) {
+void WorldWrench::on_wrench(const gz::msgs::EntityWrench &msg) {
   const auto &entity = msg.entity();
 
   const bool correct_target = (entity.name() == "riser::left_force_plate" ||
                                entity.name() == "riser::right_force_plate") &&
-                              entity.type() == ignition::msgs::Entity::LINK;
+                              entity.type() == gz::msgs::Entity::LINK;
   if (correct_target) {
+    std::lock_guard<std::mutex> lock(command_mutex_);
     if (entity.name() == "riser::left_force_plate") {
       left_wrench_ = msg_to_wrench(msg);
     } else {
@@ -76,7 +83,7 @@ void WorldWrench::resolve_target_link(sim::EntityComponentManager &ecm) {
 } // namespace riser_subject_simulation
 
 // Registers the class and its lifecycle interfaces so Gazebo can load it.
-IGNITION_ADD_PLUGIN(riser_subject_simulation::WorldWrench,
-                    ignition::gazebo::System,
-                    ignition::gazebo::ISystemConfigure,
-                    ignition::gazebo::ISystemPreUpdate)
+GZ_ADD_PLUGIN(riser_subject_simulation::WorldWrench,
+                    gz::sim::System,
+                    gz::sim::ISystemConfigure,
+                    gz::sim::ISystemPreUpdate)

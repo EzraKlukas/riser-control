@@ -36,7 +36,7 @@ anchored base and vertical gravity of 9.80665 m/s². It does not reconstruct
 removed-body bearing loads or free-base reactions.
 
 Model files live in
-[`ros2_ws/src/riser_bringup/urdf/model`](../src/riser_bringup/urdf/model).
+[`src/riser_bringup/urdf/model`](../src/riser_bringup/urdf/model).
 Plate properties are defined in `urdf/riser.urdf.xacro`. Offline
 [actuator mappings and linkage geometry](../evidence/README.md) retain the CAD
 pin geometry for mapping work. Source CAD and extraction/table-generation tools

@@ -9,18 +9,17 @@ torques and forces, with gravity, inertia and plate contact enabled.
 
 ## Build
 
-Target environment: Ubuntu 22.04, ROS 2 Humble and Gazebo Fortress, with a
-compatible `gz_ros2_control` installation. From the repository root:
+Requires Ubuntu 24.04, ROS 2 Jazzy and Gazebo Harmonic binary packages.
+Build from the repository root:
 
 ```bash
-source /opt/ros/humble/setup.bash
-cd ros2_ws
+source /opt/ros/jazzy/setup.bash
 rosdep install --from-paths src --ignore-src -y
 colcon build --cmake-args -DCMAKE_BUILD_TYPE=Release
 source install/setup.bash
 ```
 
-In each additional terminal, source ROS and `ros2_ws/install/setup.bash`.
+In each additional terminal, source ROS and `install/setup.bash`.
 
 ## Explore
 
@@ -29,11 +28,12 @@ Start Gazebo with the position controller:
 ```bash
 ros2 launch riser_bringup control.launch.py backend:=gazebo plot:=false
 # Without the Gazebo GUI:
-ros2 launch riser_bringup control.launch.py backend:=gazebo headless:=true plot:=false
+ros2 launch riser_bringup control.launch.py backend:=gazebo headless:=true plot:=false wrench_input:=false
 ```
 
 Run one launch at a time; stop it with Ctrl+C before starting another. `plot:=false`
 disables the optional PlotJuggler window, which launch otherwise opens by default.
+`wrench_input:=false` disables the optional subject wrench GUI for headless runs.
 For a kinematic preview with sliders, use
 `ros2 launch riser_bringup view.launch.py`. For controller experiments without
 physics, use `control.launch.py backend:=mock plot:=false`.
@@ -90,7 +90,8 @@ If Gazebo is already running in `actuator_position` mode, stop its normal
 controller before activating calibration:
 
 ```bash
-ros2 control load_controller --set-state inactive calibration_controller
+ros2 run controller_manager spawner calibration_controller --inactive \
+  --param-file "$(ros2 pkg prefix riser_bringup)/share/riser_bringup/config/controllers.yaml"
 ros2 control switch_controllers --strict \
   --deactivate riser_actuator_position_controller --activate calibration_controller
 ```
@@ -127,20 +128,20 @@ backend is an unimplemented hardware boundary and refuses configuration.
 
 | Path | Contents |
 | --- | --- |
-| `ros2_ws/src/riser_bringup/` | Launch files, controllers, URDF/Xacro, model parameters, worlds and state adapters. |
-| `ros2_ws/src/riser_gazebo/` | Physical actuation and reduced pitch dynamics. |
-| `ros2_ws/src/riser_hardware/` | Hardware boundary and standalone actuator-mapping helpers. |
-| `ros2_ws/src/riser_subject_simulation/` | Draft subject-load script; not yet a ROS package. |
+| `src/riser_bringup/` | Launch files, controllers, URDF/Xacro, model parameters, worlds and state adapters. |
+| `src/riser_gazebo/` | Physical actuation and reduced pitch dynamics. |
+| `src/riser_hardware/` | Hardware boundary and standalone actuator-mapping helpers. |
+| `src/riser_subject_simulation/` | Subject wrench world plugin, ROS bridge input and optional GUI. |
 | `evidence/` | Small offline linkage and actuator-mapping references. |
 
-[Configuration reference](ros2_ws/src/riser_bringup/config/README.md) identifies
+[Configuration reference](src/riser_bringup/config/README.md) identifies
 the runtime settings. [Offline model references](evidence/README.md) describe
 the retained mapping data.
 
-From `ros2_ws`, run the model/interface checks after building:
+From the repository root, run the model/interface checks after building:
 
 ```bash
-colcon test --packages-select riser_bringup
+colcon test
 colcon test-result --verbose
 ```
 

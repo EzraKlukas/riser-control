@@ -1,4 +1,4 @@
-"""Humble/Fortress simulation and mock angular control interfaces."""
+"""Simulation and mock angular control interfaces."""
 
 import os
 from pathlib import Path
@@ -60,8 +60,8 @@ def setup(context):
         )
         actions += [
             SetEnvironmentVariable(
-                "IGN_GAZEBO_SYSTEM_PLUGIN_PATH",
-                plugin_dir + ":" + os.environ.get("IGN_GAZEBO_SYSTEM_PLUGIN_PATH", ""),
+                "GZ_SIM_SYSTEM_PLUGIN_PATH",
+                plugin_dir + ":" + os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", ""),
             )
         ]  # tells gazebo sim where to search for system plugin shared libraries at runtime.
         actions += [
@@ -86,7 +86,7 @@ def setup(context):
             Node(
                 package="ros_gz_bridge",
                 executable="parameter_bridge",
-                arguments=["/clock@rosgraph_msgs/msg/Clock[ignition.msgs.Clock"],
+                arguments=["/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"],
             ),
         ]
         actions += [
@@ -100,7 +100,7 @@ def setup(context):
             Node(package="riser_bringup", executable="force_plate_frames.py"),
         ]
     else:
-        params = {"robot_description": description}
+        params = {}
         if backend == "ethercat":
             params["hardware_components_initial_state"] = {
                 "unconfigured": ["RiserSystem"]
@@ -110,6 +110,7 @@ def setup(context):
                 package="controller_manager",
                 executable="ros2_control_node",
                 parameters=[params, controllers],
+                remappings=[("robot_description", "/robot_description")],
                 output="screen",
             )
         )
@@ -129,6 +130,8 @@ def setup(context):
             "/controller_manager",
             "--controller-manager-timeout",
             "120",
+            "--param-file",
+            controllers,
         ]
         # Hardware starts inactive until the boundary can be configured explicitly.
         if backend == "ethercat":

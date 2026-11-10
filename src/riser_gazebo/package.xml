@@ -2,7 +2,7 @@
 <package format="3">
   <name>riser_gazebo</name>
   <version>0.2.0</version>
-  <description>RISER direct pitch torques, reduced linkage dynamics for Humble/Fortress.</description>
+  <description>RISER direct pitch torques and reduced linkage dynamics.</description>
   <maintainer email="maintainer@example.com">RISER maintainers</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
@@ -12,7 +12,7 @@
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
-  <depend>ignition-gazebo6</depend>
+  <depend>gz_sim_vendor</depend>
   <export>
     <build_type>ament_cmake</build_type>
   </export>

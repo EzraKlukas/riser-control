@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stamp-preserving adapter for Fortress's scoped sensor frame names.
+"""Stamp-preserving adapter for scoped sensor frame names.
 No geometric transform is performed: sensor/joint/link origins and axes are
 identical in generated SDF. Both are at the configured reporting origin.
 The node does not read its own clock: every output preserves the sensor timestamp.
@@ -40,7 +40,7 @@ def main():
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     except RuntimeError:
-        # Humble may interrupt take_message while the context is shutting down.
+        # Shutdown can interrupt take_message while the context is shutting down.
         # Preserve errors during normal operation; suppress only shutdown races.
         if node.context.ok():
             raise

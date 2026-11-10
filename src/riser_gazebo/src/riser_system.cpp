@@ -1,4 +1,4 @@
-// Humble + Fortress. Direct physical pitch torques with removed
+// Direct physical pitch torques with removed
 // stage/rod dynamics reduced onto pitch.
 // No physical pitch-joint position/velocity resets are used.
 #include "riser_gazebo/reference_mapping.hpp"
@@ -7,9 +7,9 @@
 #include <cmath>
 #include <gz_ros2_control/gz_system_interface.hpp>
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
-#include <ignition/gazebo/components/JointForceCmd.hh>
-#include <ignition/gazebo/components/JointPosition.hh>
-#include <ignition/gazebo/components/JointVelocity.hh>
+#include <gz/sim/components/JointForceCmd.hh>
+#include <gz/sim/components/JointPosition.hh>
+#include <gz/sim/components/JointVelocity.hh>
 #include <limits>
 #include <pluginlib/class_list_macros.hpp>
 #include <sensor_msgs/msg/joint_state.hpp>
@@ -205,7 +205,7 @@ public:
   bool initSim(rclcpp::Node::SharedPtr &node, // is node the cm?
                std::map<std::string, sim::Entity> &gazebo_joints,
                const hardware_interface::HardwareInfo &hardware_info,
-               sim::EntityComponentManager &ecm, int &) override {
+               sim::EntityComponentManager &ecm, unsigned int) override {
     if (hardware_interface::SystemInterface::on_init(hardware_info) !=
         hardware_interface::CallbackReturn::SUCCESS)
       return false;
@@ -285,17 +285,20 @@ public:
       const auto switch_offset = hardware_info.hardware_parameters.find("limit_switch_offset");
       if (switch_offset != hardware_info.hardware_parameters.end())
         limit_switch_offset_ = std::stod(switch_offset->second);
-      if (hardware_info.joints.size() != kPublicJointCount)
-        throw std::runtime_error("Exactly seven public joints required");
+      if (hardware_info.joints.size() != kAngularInterfaceCount ||
+          hardware_info.gpios.size() != kLinearInterfaceCount)
+        throw std::runtime_error("Exactly three angular joints and four actuator GPIOs required");
       for (size_t axis_index = 0; axis_index < kPublicJointCount;
            ++axis_index) {
+        const auto &resources = axis_index < kAngularInterfaceCount
+                                    ? hardware_info.joints
+                                    : hardware_info.gpios;
         auto joint =
-            std::find_if(hardware_info.joints.begin(),
-                         hardware_info.joints.end(), [&](const auto &joint) {
-                           return joint.name == public_joint_names_[axis_index];
-                         });
-        if (joint == hardware_info.joints.end())
-          throw std::runtime_error("Missing public joint");
+            std::find_if(resources.begin(), resources.end(), [&](const auto &joint) {
+              return joint.name == public_joint_names_[axis_index];
+            });
+        if (joint == resources.end())
+          throw std::runtime_error("Missing public joint or actuator GPIO");
         position_lower_limits_[axis_index] =
             std::stod(joint->parameters.at("lower"));
         position_upper_limits_[axis_index] =

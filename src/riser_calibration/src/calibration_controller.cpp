@@ -92,7 +92,10 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
     a.state = FINDING_NEG_LIMIT;
   }
   for (auto &a : actuators_)
-    a.command->set_value(a.target);
+    if (!a.command->set_value(a.target)) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Could not write calibration hold target");
+      return Callback::ERROR;
+    }
   current_actuator_ = 0;
   phase_seconds_ = 0;
   failed_ = false;
@@ -102,13 +105,16 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
 Callback CalibrationController::on_deactivate(const rclcpp_lifecycle::State &) {
   // Position commands hold the last valid targets; zero would request motion.
   for (auto &a : actuators_)
-    a.command->set_value(a.target);
+    if (!a.command->set_value(a.target)) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Could not write calibration hold target");
+      return Callback::ERROR;
+    }
   return Callback::SUCCESS;
 }
 
 Result CalibrationController::update(const rclcpp::Time &,
                                      const rclcpp::Duration &period) {
-  // Humble may keep calling update after ERROR. Hold until reactivated.
+  // Hold the last targets after an error until reactivated.
   if (failed_)
     return Result::OK;
   const auto fail = [&](const char *reason) {
@@ -180,7 +186,8 @@ Result CalibrationController::update(const rclcpp::Time &,
   case HOME:
     break;
   }
-  a.command->set_value(a.target);
+  if (!a.command->set_value(a.target))
+    return fail("could not write actuator target");
   return Result::OK;
 }
 } // namespace riser_calibration_controller

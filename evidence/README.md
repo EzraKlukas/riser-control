@@ -5,8 +5,8 @@ These files support geometry inspection and actuator-mapping development.
 `model_reference/actuator_mapping.json`; see
 [the library documentation](../src/riser_kinematics/README.md). Bringup does not
 load them; runtime parameters live in
-[`riser_bringup/urdf/model`](../ros2_ws/src/riser_bringup/urdf/model) and
-[`riser_bringup/config`](../ros2_ws/src/riser_bringup/config).
+[`riser_bringup/urdf/model`](../src/riser_bringup/urdf/model) and
+[`riser_bringup/config`](../src/riser_bringup/config).
 
 | File | Purpose |
 | --- | --- |
