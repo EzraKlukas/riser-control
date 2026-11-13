@@ -1,0 +1,7 @@
+<library path="wrench_aggregation_controller">
+  <class name="riser_wrench_aggregation/WrenchAggregationController"
+         type="riser_wrench_aggregation::WrenchAggregationController"
+         base_class_type="controller_interface::ChainableControllerInterface">
+    <description>Transforms and sums plate wrenches at the ankle midpoint.</description>
+  </class>
+</library>

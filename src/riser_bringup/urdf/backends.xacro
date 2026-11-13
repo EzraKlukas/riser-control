@@ -117,8 +117,8 @@
     <xacro:if value="${backend == 'gazebo'}">
       <gazebo>
         <plugin
-            filename="gz_ros2_control-system"
-            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+            filename="libriser_gazebo_system.so"
+            name="riser_gazebo::PhysicsClockControlPlugin">
           <ros>
             <remapping>robot_description:=/robot_description</remapping>
           </ros>

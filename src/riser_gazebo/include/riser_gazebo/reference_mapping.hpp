@@ -1,7 +1,8 @@
 #pragma once
 
 #include <algorithm>
-#include <array> #include <cmath>
+#include <array>
+#include <cmath>
 #include <riser_kinematics/lateral.hpp>
 
 namespace riser_gazebo {

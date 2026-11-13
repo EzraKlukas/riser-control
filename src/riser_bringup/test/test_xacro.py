@@ -59,6 +59,9 @@ def test_independent_sensing_paths_and_contact_geometry():
             str(share / "urdf/riser.urdf.xacro"), mappings={"backend": "gazebo"}
         ).toxml()
     )
+    plugin = root.find("gazebo/plugin")
+    assert plugin.get("filename") == "libriser_gazebo_system.so"
+    assert plugin.get("name") == "riser_gazebo::PhysicsClockControlPlugin"
     assert len(root.findall(".//visual")) == 11
     assert len(root.findall(".//collision")) == 4
     assert root.find("link[@name='foot_platform']/collision") is None
@@ -72,6 +75,7 @@ def test_independent_sensing_paths_and_contact_geometry():
         assert gz.find("preserveFixedJoint").text == "true"
         assert gz.find("sensor/pose").text == "0 0 0 0 0 0"
         assert gz.find("sensor/force_torque/frame").text == "sensor"
+        assert float(gz.find("sensor/update_rate").text) == 1000.
         assert root.find("link[@name='%s']/collision" % name) is not None
         sensor = root.find(f"ros2_control/sensor[@name='{name}']")
         assert sensor.find("command_interface") is None

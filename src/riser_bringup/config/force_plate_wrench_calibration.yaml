@@ -1,0 +1,68 @@
+# Riser physical force-plate calibration (plain YAML reference data).
+# Operational geometry, linear transforms and gains are in controllers.yaml.
+# The aggregation controller consumes SI surface wrenches and does not apply
+# these factory electrical matrices or transducer-origin offsets.
+#
+# The factory sheets give O -> C in mm, where O is the effective transducer
+# origin and C is the center of the top surface. The vectors below are C -> O
+# in meters. The physical plate axes at neutral are X left, Y forward, Z down.
+# The axes follow each plate as the platform pitches. The sensor readings
+# are confirmed to align with these axes, so the factory offsets and matrix
+# outputs use this convention directly.
+# For a wrench measured at O, shift to C with M_C = M_O + (C -> O) x F.
+# Gazebo state interfaces already report about C in these physical axes.
+# Apply the factory origin shift only to measurements referred to O.
+schema_version: 1
+manufacturer: AMTI
+model: "BP250500-2K-3847"
+source_document: "Force Plates Specifications.pdf"
+offset_axes: riser_physical_xyz
+wrench_components: [Fx, Fy, Fz, Mx, My, Mz]
+wrench_units: [N, N, N, "N*m", "N*m", "N*m"]
+
+# surface_frame identifies the surface-centre origin in the model. Vector
+# components use offset_axes, which follows the Gazebo mapping (y, x, -z).
+plates:
+  left:
+    serial_number: "7206"
+    factory_calibration_id: "7206.1"
+    calibration_date: "2010-12-16"
+    surface_frame: left_force_plate
+    source_pages: {origin: 3, inverse_sensitivity: 4}
+    # Factory O -> C (mm): [0.683, -0.044, -41.227]
+    surface_center_to_transducer_origin_m: [-0.000683, 0.000044, 0.041227]
+
+  right:
+    serial_number: "7207"
+    factory_calibration_id: "7207.1"
+    calibration_date: "2010-12-17"
+    surface_frame: right_force_plate
+    source_pages: {origin: 1, inverse_sensitivity: 2}
+    # Factory O -> C (mm): [0.954, 0.415, -41.344]
+    surface_center_to_transducer_origin_m: [-0.000954, -0.000415, 0.041344]
+
+# Factory electrical calibration, separate from the geometric transform.
+# Use these matrices only for normalized bridge signals after tare and gain
+# correction. Incoming wrenches already in N and N*m bypass this step.
+# Wrench at O = inverse_sensitivity_si * bridge_signal.
+bridge_calibration:
+  output_axes: riser_physical_xyz
+  # Electrical input channels follow the factory order.
+  channel_order: [VFx, VFy, VFz, VMx, VMy, VMz]
+  input_units: "uV/V_excitation"
+  # Rows are wrench_components; columns are channel_order.
+  inverse_sensitivity_si_by_serial:
+    "7206":
+      - [2.8809, 0.0060,  0.0244, 0.0015, -0.0625,  0.0140]
+      - [0.0013, 2.8998, -0.0187, 0.0005,  0.0114, -0.0052]
+      - [0.0301, 0.0420, 11.3121, 0.0128, -0.0155,  0.0197]
+      - [0.0001,-0.0014,  0.0004, 1.2953, -0.0005, -0.0132]
+      - [-0.0011,0.0007,  0.0077, 0.0009,  0.7447, -0.0042]
+      - [0.0022, 0.0099,  0.0040, 0.0042,  0.0029,  0.4809]
+    "7207":
+      - [2.8851, 0.0210,  0.0192,  0.0001, -0.0675,  0.0184]
+      - [0.0020, 2.9081, -0.0130,  0.0229,  0.0061, -0.0116]
+      - [0.0496, 0.0027, 11.3053, -0.0047, -0.0334,  0.0207]
+      - [-0.0017,0.0025, -0.0047,  1.2959, -0.0033, -0.0055]
+      - [0.0028,-0.0012,  0.0108, -0.0014,  0.7504,  0.0004]
+      - [0.0119, 0.0227, -0.0047,  0.0020, -0.0011,  0.4726]

@@ -28,8 +28,15 @@ int main() {
   message.mutable_torque()->set_y(5.);
   message.mutable_torque()->set_z(-6.);
   left.receive(message);
+  // A delayed ROS clock would reject a current measurement. The adapter must
+  // supply the exact physics read-cycle time, not that delayed clock value.
+  left.read(1001000000, .1);
+  CHECK(left.values()[7] == 0.);
+  CHECK(std::isnan(left.values()[2]));
+  left.read(1002000000, .1);
+  CHECK(left.values()[7] == 1.);
   left.read(1003000000, .1);
-  const std::array<double, 6> expected{1., -2., 300., -4., 5., -6.};
+  const std::array<double, 6> expected{-2., 1., -300., 5., -4., 6.};
   for (std::size_t i = 0; i < expected.size(); ++i)
     CHECK(left.values()[i] == expected[i]);
   CHECK(std::abs(left.values()[6] - 1.002) < 1e-12);

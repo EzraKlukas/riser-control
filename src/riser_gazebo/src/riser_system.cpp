@@ -2,6 +2,7 @@
 // stage/rod dynamics reduced onto pitch.
 // No physical pitch-joint position/velocity resets are used.
 #include "riser_gazebo/force_plate_state.hpp"
+#include "riser_gazebo/physics_clock.hpp"
 #include "riser_gazebo/reference_mapping.hpp"
 #include <algorithm>
 #include <array>
@@ -9,6 +10,7 @@
 #include <gz/sim/components/JointForceCmd.hh>
 #include <gz/sim/components/JointPosition.hh>
 #include <gz/sim/components/JointVelocity.hh>
+#include <gz/sim/components/ParentEntity.hh>
 #include <gz/transport/Node.hh>
 #include <gz_ros2_control/gz_system_interface.hpp>
 #include <hardware_interface/types/hardware_interface_type_values.hpp>
@@ -44,6 +46,15 @@ using ReturnType = hardware_interface::return_type;
 // PreUpdate. This class implements hardware callbacks, not Gazebo update hooks.
 class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   sim::EntityComponentManager *ecm_ = nullptr;
+  sim::Entity model_entity_ = sim::kNullEntity;
+  double read_time_s_ = std::numeric_limits<double>::quiet_NaN();
+
+  const PhysicsClock &physics_clock() const {
+    const auto *clock = ecm_->Component<PhysicsClockComponent>(model_entity_);
+    if (!clock)
+      throw std::runtime_error("Missing RISER physics clock context");
+    return clock->Data();
+  }
   // Public angles use radians, actuator strokes use metres from neutral.
   // Only ML couples two physical joints.
   std::array<std::string, kPublicJointCount> public_joint_names_{
@@ -270,6 +281,11 @@ public:
           ecm.CreateComponent(physical_joints_[axis_index],
                               sim::components::JointVelocity());
       }
+      model_entity_ = ecm.Component<sim::components::ParentEntity>(
+                          physical_joints_[0])->Data();
+      if (!ecm.Component<PhysicsClockComponent>(model_entity_))
+        throw std::runtime_error(
+            "AngularSystem requires riser_gazebo::PhysicsClockControlPlugin");
       // Pitch stages are represented by dynamics tables, not linear joints.
       for (size_t axis_index = 0; axis_index < 2; ++axis_index) {
         const std::string prefix = axis_index == 0 ? "top_" : "bottom_";
@@ -427,6 +443,8 @@ public:
         interfaces.emplace_back(force_plate_names_[i],
                                 ForcePlateState::InterfaceNames[j],
                                 &force_plates_[i]->values()[j]);
+    // Read-cycle metadata is exported independently of the two sensor samples.
+    interfaces.emplace_back("RiserSystem", "read_time", &read_time_s_);
     return interfaces;
   }
   // Both types are registered; write() consumes only the startup-selected
@@ -462,7 +480,9 @@ public:
     zero_drive_efforts();
     return hardware_interface::CallbackReturn::SUCCESS;
   }
-  ReturnType read(const rclcpp::Time &now, const rclcpp::Duration &) override {
+  ReturnType read(const rclcpp::Time &, const rclcpp::Duration &) override {
+    const rclcpp::Time now(physics_clock().time_ns, RCL_ROS_TIME);
+    read_time_s_ = now.seconds();
     for (std::size_t i = 0; i < force_plates_.size(); ++i)
       force_plates_[i]->read(now.nanoseconds(), force_plate_timeouts_[i]);
     try {
@@ -529,18 +549,18 @@ public:
     }
     return ReturnType::OK;
   }
-  ReturnType write(const rclcpp::Time &now, const rclcpp::Duration &) override {
-    // gz_ros2_control passes time since its last controller update, not since
-    // its previous physics-step write. Integrate only the actual write delta.
-    const auto write_time_ns = now.nanoseconds();
+  ReturnType write(const rclcpp::Time &, const rclcpp::Duration &) override {
+    // The resource manager may replace callback time with a delayed ROS clock.
+    // Physics context is supplied synchronously by our Gazebo plugin instead.
+    const auto &clock = physics_clock();
+    if (clock.paused || clock.step_ns <= 0)
+      return ReturnType::OK;
+    const auto write_time_ns = clock.time_ns;
     if (last_write_ns_ >= 0 && write_time_ns < last_write_ns_) {
       previous_pitch_velocity_valid_ = false;
       references_seeded_ = false;
     }
-    double step_seconds =
-        last_write_ns_ < 0
-            ? 0.
-            : std::max(0., (write_time_ns - last_write_ns_) * 1e-9);
+    const double step_seconds = clock.step_ns * 1e-9;
     last_write_ns_ = write_time_ns;
     if (!state_ready_) {
       zero_drive_efforts();

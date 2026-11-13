@@ -8,8 +8,10 @@ namespace riser_calibration_controller {
 using Callback = controller_interface::CallbackReturn;
 using Result = controller_interface::return_type;
 
-static double read_state(const hardware_interface::LoanedStateInterface &state) {
-  return state.get_optional().value_or(std::numeric_limits<double>::quiet_NaN());
+static double
+read_state(const hardware_interface::LoanedStateInterface &state) {
+  return state.get_optional().value_or(
+      std::numeric_limits<double>::quiet_NaN());
 }
 
 // Resolve names once at activation; update() uses readable, checked handles.

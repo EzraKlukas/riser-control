@@ -33,9 +33,10 @@ public:
               (std::numeric_limits<int64_t>::max() - stamp.nsec()) / billion)
         sample.time_ns = stamp.sec() * billion + stamp.nsec();
     }
-    sample.wrench = {message.force().x(),  message.force().y(),
-                     message.force().z(),  message.torque().x(),
-                     message.torque().y(), message.torque().z()};
+    // Express the surface-centre wrench in the physical axes: (y, x, -z).
+    sample.wrench = {message.force().y(),  message.force().x(),
+                     -message.force().z(), message.torque().y(),
+                     message.torque().x(), -message.torque().z()};
     sample.valid =
         message.has_force() && message.has_torque() && sample.time_ns >= 0 &&
         std::all_of(sample.wrench.begin(), sample.wrench.end(),

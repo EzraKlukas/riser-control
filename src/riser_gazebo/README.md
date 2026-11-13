@@ -5,6 +5,27 @@ ultimately provide two pitch-angle targets and two independent physical slide
 targets to the PD servos. Virtual actuator resources provide stroke references
 and feedback without adding physical pitch actuator bodies.
 
+## Simulation timing
+
+`PhysicsClockControlPlugin` wraps the installed Gazebo control plugin and records
+`UpdateInfo.simTime`, `dt` and pause state on the model before each physics step.
+`AngularSystem` uses this synchronous context for hardware reads, effort writes
+and reduced-dynamics calculations. Callback timestamps from the resource manager
+can come from delayed `/clock` delivery and are not used to advance the physics.
+Every advancing physics step receives its effort commands, including when the
+controller reference remains constant. The context handoff adds no per-step
+allocation, blocking I/O or mutex acquisition; it runs in Gazebo's update phases.
+ROS publication and transport still have their existing scheduling costs.
+
+`RiserSystem/read_time` is a read-only state in simulation seconds, describing the
+hardware read cycle. Controllers can use it to check sample age in the same
+clock as the sensor timestamps. The wrench controller selects this state with
+`read_time_interface`; no Gazebo-specific dependency is added to that controller.
+`/clock` remains available for ROS tools. Pause stops physics-time advancement.
+For a full reset, restart the launch. Gazebo's in-place full-world reset
+reconstructs the binary controller manager; controller service recovery was not
+reliable during validation. Pause/resume keeps the existing manager and state.
+
 ## The three index spaces
 
 `reference_mapping.hpp` names the index spaces so different array orders cannot
@@ -108,25 +129,26 @@ the existing error path still logs and uses exceptions.
 The Gazebo backend declares `left_force_plate` and `right_force_plate` as
 ros2_control sensors. Each exports `force.x`, `force.y`, `force.z`, `torque.x`,
 `torque.y`, `torque.z`, `sample_time` and `valid`; for example, a controller can
-claim `left_force_plate/force.z`. There are 45 state handles in total and no
-additional command handles. Mock and EtherCAT resources are unchanged.
+claim `left_force_plate/force.z`. There are 46 state handles in total: the existing 45 feedback handles plus
+`RiserSystem/read_time`. There are no additional command handles. Mock and EtherCAT resources are unchanged.
 
-Force and torque remain in N and N m, expressed at each plate's top-surface
-centre in its local axes, exactly as on the existing wrench topics. This
-adapter does not rotate, shift, combine or compensate the wrenches, and does
-not apply the physical transducer's factory-origin offsets.
+Force and torque are in N and N m at each plate's top-surface centre. The state
+interfaces express both vectors in physical axes `(y_gz, x_gz, -z_gz)`. The
+wrench topics report in the Gazebo plate frames. When using the state interfaces,
+express moment arms in the corresponding axes before shifting torque.
 
 The adapter subscribes directly to each Gazebo sensor topic, so state feedback
 does not depend on the ROS bridge. Transport callbacks copy into fixed storage;
 `read()` attempts one nonblocking mutex acquisition per sensor and otherwise
 retains the last snapshot. Exported storage is updated only by `read()`.
-Sensor delivery is asynchronous: a 1000 Hz controller can reuse samples from
-the default 500 Hz sensors. There is no wall-clock delivery or synchronisation
-guarantee between the plates or joint feedback.
+Sensors and controllers both default to 1000 Hz in simulation time. Sensor
+delivery is asynchronous, so a controller can still reuse a previous sample.
+There is no wall-clock delivery or synchronisation guarantee between the plates
+or joint feedback.
 
 `sample_time` is the original sensor timestamp in simulation seconds (NaN when
 absent). `valid` is 1 only for a complete finite sample dated no later than the
-current controller time and no older than `sample_timeout`. Before the first
+current physics read-cycle time and no older than `sample_timeout`. Before the first
 sample, on malformed data, after a clock reset leaving a future-dated sample,
 or after timeout, `valid` is 0 and all six wrench values are NaN. Missing sensor
 data does not disable motion control; consuming controllers must check validity,

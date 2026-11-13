@@ -55,13 +55,14 @@ def setup(context):
     ]
     if sim:
         gz = Path(get_package_share_directory("ros_gz_sim"))
-        plugin_dir = str(
-            Path(get_package_share_directory("riser_subject_simulation")).parents[1] / "lib"
-        )
+        plugin_dirs = [
+            str(Path(get_package_share_directory(package)).parents[1] / "lib")
+            for package in ("riser_gazebo", "riser_subject_simulation")
+        ]
         actions += [
             SetEnvironmentVariable(
                 "GZ_SIM_SYSTEM_PLUGIN_PATH",
-                plugin_dir + ":" + os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", ""),
+                ":".join(plugin_dirs + [os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")]),
             )
         ]  # tells gazebo sim where to search for system plugin shared libraries at runtime.
         actions += [
@@ -123,27 +124,30 @@ def setup(context):
         )
     controller_mode = mode.removeprefix("angular_")
     chosen = "calibration_controller" if calibrate else f"riser_{controller_mode}_controller"
-    for name in ["joint_state_broadcaster", chosen]:
-        args = [
-            name,
-            "--controller-manager",
-            "/controller_manager",
-            "--controller-manager-timeout",
-            "120",
-            "--param-file",
-            controllers,
-        ]
-        # Hardware starts inactive until the boundary can be configured explicitly.
-        if backend == "ethercat":
-            args.append("--inactive")
-        actions.append(
-            Node(
-                package="controller_manager",
-                executable="spawner",
-                arguments=args,
-                output="screen",
-            )
+    # Load the ordinary broadcaster before controller-exported states exist,
+    # then activate the wrench provider before its dedicated consumer.
+    names = ["joint_state_broadcaster", chosen]
+    if sim:
+        names += ["ankle_wrench", "ankle_wrench_state_broadcaster"]
+    args = names + [
+        "--controller-manager",
+        "/controller_manager",
+        "--controller-manager-timeout",
+        "120",
+        "--param-file",
+        controllers,
+    ]
+    # Hardware starts inactive until the boundary can be configured explicitly.
+    if backend == "ethercat":
+        args.append("--inactive")
+    actions.append(
+        Node(
+            package="controller_manager",
+            executable="spawner",
+            arguments=args,
+            output="screen",
         )
+    )
 
     if plot:
         actions.append(
@@ -171,7 +175,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "headless", default_value="false", choices=["true", "false"]
             ),
-            DeclareLaunchArgument("force_plate_rate", default_value="500"),
+            DeclareLaunchArgument("force_plate_rate", default_value="1000"),
             DeclareLaunchArgument(
                 "calibrate", default_value="false", choices=["true", "false"]
             ),

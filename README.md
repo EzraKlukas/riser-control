@@ -118,12 +118,25 @@ Controllers can also claim `left_force_plate/force.x` through
 `left_force_plate/torque.z`, and the corresponding `right_force_plate` state
 interfaces. Each sensor exposes `sample_time` (simulation seconds) and `valid`
 (1 for a finite sample no older than its configured `sample_timeout`, otherwise
-0). Unavailable force/torque values are NaN. These readings retain the same
-surface origins, axes and units as the topics; no wrench transformation is
-applied. See the [Gazebo interface reference](src/riser_gazebo/README.md#force-plate-state-interfaces).
+0). Unavailable force/torque values are NaN. The state interfaces report force
+and torque at the surface centres in physical axes `(y_gz, x_gz, -z_gz)`.
+The wrench topics report in the Gazebo plate frames. See the [Gazebo interface reference](src/riser_gazebo/README.md#force-plate-state-interfaces).
+
+Gazebo bringup also runs `ankle_wrench`, exporting the combined wrench at the
+ankle midpoint in physical axes attached to the foot platform. Inspect all eight
+output states on `/ankle_wrench_state_broadcaster/dynamic_joint_states`, including
+`valid` and `sample_time`. Matrices, gains and moment arms are in
+`src/riser_bringup/config/controllers.yaml`; see the
+[parameter and frame reference](src/riser_bringup/config/README.md#ankle-wrench).
+Factory calibration is kept separately in that directory and is bypassed for
+simulated SI surface wrenches. Weight and inertia remain in the combined reading.
+
+The Gazebo control wrapper supplies exact physics time to the hardware adapter.
+`RiserSystem/read_time` exposes the read-cycle timestamp used by wrench validation;
+ROS clock-message delivery does not determine hardware integration intervals.
 
 Physics uses a 1 ms step, the controller is configured for 1000 Hz, and each
-force sensor defaults to 500 Hz (`force_plate_rate:=...`). These are simulation
+force sensor defaults to 1000 Hz (`force_plate_rate:=...`). These are simulation
 settings; wall-clock throughput and ROS delivery depend on rendering, contacts
 and scheduling. Reduced pitch inertia uses acceleration delayed by one physics
 step. Servo gains and travel bounds are provisional simulation parameters.

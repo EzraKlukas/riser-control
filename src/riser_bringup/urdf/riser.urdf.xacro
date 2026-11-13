@@ -12,7 +12,7 @@
   <xacro:arg
       name="control_coordinates_file"
       default="$(find riser_bringup)/config/control_coordinates.json" />
-  <xacro:arg name="force_plate_rate" default="500" />
+  <xacro:arg name="force_plate_rate" default="1000" />
 
   <xacro:property name="k" value="${xacro.load_yaml('$(arg kinematics_file)')}" />
   <xacro:property name="d" value="${xacro.load_yaml('$(arg dynamics_file)')}" />
