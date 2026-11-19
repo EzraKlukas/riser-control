@@ -9,30 +9,31 @@
   <xacro:arg name="geometry_file" default="$(find riser_bringup)/urdf/model/geometry.yaml" />
   <xacro:arg name="controllers_file" default="$(find riser_bringup)/config/controllers.yaml" />
   <xacro:arg name="command_mode" default="position" />
-  <xacro:arg name="calibrate" default="false" />
   <xacro:arg
       name="control_coordinates_file"
       default="$(find riser_bringup)/config/control_coordinates.json" />
   <xacro:arg name="force_plate_rate" default="1000" />
 
   <xacro:property name="k" value="${xacro.load_yaml('$(arg kinematics_file)')}" />
-  <xacro:property name="gazebo_calibration"
-      value="${'$(arg backend)' == 'gazebo' and '$(arg command_mode)' == 'actuator_position' and '$(arg calibrate)' == 'true'}" />
-  <xacro:property name="calibration_travel_time_s" value="1.0" />
+  <xacro:property name="gazebo_backend" value="${'$(arg backend)' == 'gazebo'}" />
+  <xacro:property name="gazebo_travel_time_s" value="1.0" />
+  <xacro:property name="model_velocity"
+      value="${dict((name, (k['joints'][name]['upper'] - k['joints'][name]['lower']) / gazebo_travel_time_s if gazebo_backend else k['joints'][name]['velocity']) for name in k['joints'])}" />
   <xacro:property name="d" value="${xacro.load_yaml('$(arg dynamics_file)')}" />
   <xacro:property name="g" value="${xacro.load_yaml('$(arg geometry_file)')}" />
   <xacro:property
       name="rd"
       value="${xacro.load_yaml('$(find riser_bringup)/urdf/model/reduced_pitch.json')}" />
   <xacro:property name="c" value="${xacro.load_yaml('$(arg control_coordinates_file)')}" />
+  <xacro:property name="model_ml_velocity"
+      value="${c['ml']['velocity_rad_s'] * min(model_velocity['torso_lateral'] / k['joints']['torso_lateral']['velocity'], model_velocity['hip_lateral'] / k['joints']['hip_lateral']['velocity'])}" />
 
   <xacro:include filename="$(find riser_bringup)/urdf/backends.xacro" />
 
   <xacro:macro name="physical_joint_limit" params="axis effort">
     <xacro:property name="joint" value="${k['joints'][axis]}" />
-    <xacro:property name="travel" value="${joint['upper'] - joint['lower']}" />
     <limit lower="${joint['lower']}" upper="${joint['upper']}" effort="${effort}"
-        velocity="${travel / calibration_travel_time_s if gazebo_calibration else joint['velocity']}" />
+        velocity="${model_velocity[axis]}" />
   </xacro:macro>
 
   <!-- Robot links: base, backboard, setup hardware and carriages. -->
@@ -350,7 +351,7 @@
     <child link="ml_coordinate" />
     <origin xyz="0 0 0" rpy="0 0 0" />
     <axis xyz="1 0 0" />
-    <limit lower="${-c['ml']['limit_rad']}" upper="${c['ml']['limit_rad']}" effort="500" velocity="${c['ml']['velocity_rad_s']}" />
+    <limit lower="${-c['ml']['limit_rad']}" upper="${c['ml']['limit_rad']}" effort="500" velocity="${model_ml_velocity}" />
     <dynamics damping="0.1" friction="0" />
   </joint>
 

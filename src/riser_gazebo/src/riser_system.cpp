@@ -221,6 +221,22 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
       for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
         commands[PublicForAxis[axis]] = source[axis];
     }
+    if (velocity(mode)) {
+      // A velocity controller can keep commanding outward after a switch.
+      // Stop that coordinate and keep inward commands available for recovery.
+      constexpr std::array<std::size_t, ActuatorCount> angular_coordinate{
+          Backboard, Ml, Ml, FootPlate};
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+        const auto coordinate = angular(mode) ? angular_coordinate[axis]
+                                              : PublicForAxis[axis];
+        auto &command = commands[coordinate];
+        const double stroke_direction =
+            angular(mode) ? measured_jacobian_[axis] * command : command;
+        if ((limit_switch_lower_[axis] && stroke_direction < 0.) ||
+            (limit_switch_upper_[axis] && stroke_direction > 0.))
+          command = 0.;
+      }
+    }
     // Steps 0 / 0.5 / 1 live in ReferenceMapping::update:
     // validate/integrate native commands once, convert with f^-1 and J, and
     // recheck both coordinate systems. Failure leaves references unchanged.

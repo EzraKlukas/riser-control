@@ -1,5 +1,6 @@
 #pragma once
 
+#include "riser_wrench_aggregation/torque_perturbation.hpp"
 #include "riser_wrench_aggregation/transformations.hpp"
 #include <algorithm>
 #include <cmath>
@@ -106,7 +107,8 @@ inline Matrix3 matrix_from_values(const std::vector<double> &values) {
 
 class WrenchAggregationLogic {
 public:
-  const char *configure(const Parameters &parameters) {
+  const char *configure(const Parameters &parameters,
+                        PerturbationParameters perturbation = {}) {
     if (active_)
       return "Deactivate before configuring";
     if (!finite_vector(parameters.left.ankle_to_origin, 3) ||
@@ -120,6 +122,8 @@ public:
         !std::isfinite(parameters.right.gain) ||
         !std::isfinite(parameters.ankle_gain))
       return "Wrench gains must be finite";
+    if (const auto *error = perturbation_.configure(std::move(perturbation)))
+      return error;
     Configuration next;
     std::copy_n(parameters.left.ankle_to_origin.begin(), 3,
                 next.left.ankle_to_origin.begin());
@@ -173,6 +177,7 @@ public:
   void deactivate() {
     active_ = false;
     capture_ = {};
+    reset_perturbation();
   }
 
   void begin_capture(Capture mode) {
@@ -187,8 +192,17 @@ public:
   }
   double subject_mass_kg() const { return subject_mass_kg_; }
 
+  double &torque_x_before_perturbation() { return torque_x_before_nm_; }
+  bool csv_playing() const { return perturbation_.csv_playing(); }
+
+  template <class Register>
+  void register_introspection(Register &&register_value) {
+    register_value("torque_x_before_perturbation", &torque_x_before_nm_);
+  }
+
   UpdateResult update(const Inputs &inputs, double read_time_s,
-                      double foot_pitch_rad = Unavailable) {
+                      double foot_pitch_rad = Unavailable,
+                      bool multisine_enabled = false, bool start_csv = false) {
     if (!active_)
       return invalid_update("Logic is inactive");
     if (const auto *error = validate_inputs(inputs, read_time_s))
@@ -202,8 +216,13 @@ public:
       output.wrench.force[i] -= offset_.force[i];
       output.wrench.torque[i] -= offset_.torque[i];
     }
-    if (!finite(output.wrench))
-      return {{}, "Tared wrench is nonfinite", capture};
+    torque_x_before_nm_ = output.wrench.torque[0];
+    output.wrench.torque[0] +=
+        perturbation_.update(read_time_s, multisine_enabled, start_csv);
+    if (!finite(output.wrench)) {
+      reset_perturbation();
+      return {{}, "Final ankle wrench is nonfinite", capture};
+    }
     return {output, nullptr, capture};
   }
 
@@ -222,10 +241,16 @@ private:
   }
 
   UpdateResult invalid_update(const char *error) {
+    reset_perturbation();
     return {{},
             error,
             capture_active() ? finish(CaptureResult::InvalidSample)
                              : CaptureResult::Pending};
+  }
+
+  void reset_perturbation() {
+    torque_x_before_nm_ = Unavailable;
+    perturbation_.reset();
   }
 
   CaptureResult collect(const WrenchSample &sample, double foot_pitch_rad) {
@@ -320,6 +345,8 @@ private:
   }
 
   Configuration configuration_;
+  TorquePerturbation perturbation_;
+  double torque_x_before_nm_ = Unavailable;
   CaptureWindow capture_;
   Wrench empty_tare_{};
   Wrench offset_{};

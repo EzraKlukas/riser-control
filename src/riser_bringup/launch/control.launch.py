@@ -32,7 +32,8 @@ def setup(context):
     plot = LaunchConfiguration("plot").perform(context) == "true";
     wrench_input = LaunchConfiguration("wrench_input").perform(context) == "true";
     sim = backend == "gazebo"
-    controllers = str(share / "config/controllers.yaml")
+    controllers = LaunchConfiguration("controllers_file").perform(context)
+    plot_telemetry = LaunchConfiguration("plot_telemetry").perform(context) == "true"
     # having parsed command line inputs, we parse urdf, first conforming the xml to the inputs.
     description = xacro.process_file(
         str(share / "urdf/riser.urdf.xacro"),
@@ -40,7 +41,6 @@ def setup(context):
             "backend": backend,
             "controllers_file": controllers,
             "command_mode": mode,
-            "calibrate": str(calibrate).lower(),
             "control_coordinates_file": LaunchConfiguration("coordinates_file").perform(
                 context
             ),
@@ -136,6 +136,12 @@ def setup(context):
     names = ["joint_state_broadcaster", chosen]
     if sim:
         names += ["ankle_wrench", "ankle_wrench_state_broadcaster"]
+        if plot or plot_telemetry:
+            names.append("ankle_wrench_plot_broadcaster")
+            actions.append(Node(
+                package="riser_bringup",
+                executable="ankle_plot_wrenches.py",
+            ))
     args = names + [
         "--controller-manager",
         "/controller_manager",
@@ -172,6 +178,15 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "controllers_file",
+                default_value=str(
+                    Path(get_package_share_directory("riser_bringup"))
+                    / "config/controllers.yaml"
+                ),
+            ),
+            DeclareLaunchArgument("plot_telemetry", default_value="false",
+                                  choices=["true", "false"]),
             DeclareLaunchArgument(
                 "coordinates_file",
                 default_value=str(

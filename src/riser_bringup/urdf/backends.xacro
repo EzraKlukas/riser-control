@@ -69,19 +69,19 @@
             name="backboard_pitch"
             lower="${k['joints']['frame_pitch']['lower']}"
             upper="${k['joints']['frame_pitch']['upper']}"
-            velocity="${k['joints']['frame_pitch']['velocity']}"
+            velocity="${model_velocity['frame_pitch']}"
             mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
         <xacro:public_control_joint
             name="foot_plate_pitch"
             lower="${k['joints']['foot_pitch']['lower']}"
             upper="${k['joints']['foot_pitch']['upper']}"
-            velocity="${k['joints']['foot_pitch']['velocity']}"
+            velocity="${model_velocity['foot_pitch']}"
             mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
         <xacro:public_control_joint
             name="ml_angle"
             lower="${-c['ml']['limit_rad']}"
             upper="${c['ml']['limit_rad']}"
-            velocity="${c['ml']['velocity_rad_s']}"
+            velocity="${model_ml_velocity}"
             mode="${command_mode}" all_commands="${backend == 'gazebo'}" />
         <xacro:if value="${backend == 'gazebo'}">
           <xacro:force_plate_state name="left_force_plate" side="left" />
@@ -93,22 +93,22 @@
           <xacro:public_control_joint name="top_actuator" resource_type="gpio"
               lower="${k['joints']['top_actuator']['lower']}"
               upper="${k['joints']['top_actuator']['upper']}"
-              velocity="${k['joints']['top_actuator']['velocity']}"
+              velocity="${model_velocity['top_actuator']}"
               mode="${command_mode}" all_commands="true" />
           <xacro:public_control_joint name="torso_actuator" resource_type="gpio"
               lower="${k['joints']['torso_actuator']['lower']}"
               upper="${k['joints']['torso_actuator']['upper']}"
-              velocity="${k['joints']['torso_actuator']['velocity']}"
+              velocity="${model_velocity['torso_actuator']}"
               mode="${command_mode}" all_commands="true" />
           <xacro:public_control_joint name="hip_actuator" resource_type="gpio"
               lower="${k['joints']['hip_actuator']['lower']}"
               upper="${k['joints']['hip_actuator']['upper']}"
-              velocity="${k['joints']['hip_actuator']['velocity']}"
+              velocity="${model_velocity['hip_actuator']}"
               mode="${command_mode}" all_commands="true" />
           <xacro:public_control_joint name="bottom_actuator" resource_type="gpio"
               lower="${k['joints']['bottom_actuator']['lower']}"
               upper="${k['joints']['bottom_actuator']['upper']}"
-              velocity="${k['joints']['bottom_actuator']['velocity']}"
+              velocity="${model_velocity['bottom_actuator']}"
               mode="${command_mode}" all_commands="true" />
         </xacro:if>
       </ros2_control>

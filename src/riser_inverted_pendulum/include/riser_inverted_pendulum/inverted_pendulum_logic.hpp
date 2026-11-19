@@ -40,7 +40,7 @@ struct Parameters {
   double viscosity = 0.; // N m s / rad
   double mass = 0.;      // kg. Zero selects the provider's measured mass.
   double height = 1.80;
-  double max_backboard_rate_rad_s = 0.012;
+  double max_backboard_rate_rad_s = 0.; // Set from the configured robot model.
   bool is_male = true;   // for gender-based constants.
   // to add and implement later: inertia gain, footplate scaling, backboard
   // scaling, ml scaling, b scaling, gravity, halt-based params, ankle width,

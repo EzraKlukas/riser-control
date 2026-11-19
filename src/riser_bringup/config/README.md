@@ -116,6 +116,11 @@ Processing order in `WrenchAggregationLogic::compute_wrench()`:
    `left_wrench_gain` and `right_wrench_gain`.
 4. Sum forces and `plate torque + (ankle-to-plate arm × plate force)`.
 5. Subtract the latest tare from all six ankle wrench components.
+6. Add any enabled AP perturbations to `torque.x` just before export.
+
+Both perturbations default to off. The
+[AP perturbation tutorial](perturbation-tutorial.md) covers the parameters,
+playback and multisine services, and before/after torque plotting.
 
 Thus a shared matrix with different gains uses `same_transformation=true` and
 `same_scaling=false`. Matrix entries are arbitrary experimental operations on
@@ -184,6 +189,8 @@ ros2 control switch_controllers --strict --deactivate \
 ros2 control switch_controllers --strict --activate \
   ankle_wrench joint_state_broadcaster ankle_wrench_state_broadcaster
 ```
+
+Include `ankle_wrench_plot_broadcaster` in both requests if it is running.
 
 Settings are cached at configuration:
 deactivate, edit parameters, then clean up/configure and reactivate the provider

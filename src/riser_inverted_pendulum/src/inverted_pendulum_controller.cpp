@@ -1,12 +1,30 @@
 #include "riser_inverted_pendulum/inverted_pendulum_controller.hpp"
 #include "riser_inverted_pendulum/inverted_pendulum_logic.hpp"
 #include <controller_interface/controller_interface_base.hpp>
+#include <hardware_interface/component_parser.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/logging.hpp>
 
 namespace riser_inverted_pendulum_controller {
 using Callback = controller_interface::CallbackReturn;
 using Result = controller_interface::return_type;
+
+namespace {
+double backboard_rate_limit(const std::string &description) {
+  for (const auto &component :
+       hardware_interface::parse_control_resources_from_urdf(description)) {
+    for (const auto &joint : component.joints) {
+      if (joint.name != "backboard_pitch")
+        continue;
+      const double rate = std::stod(joint.parameters.at("velocity_limit"));
+      if (std::isfinite(rate) && rate > 0.)
+        return rate;
+      throw std::invalid_argument("Invalid backboard velocity_limit in robot description");
+    }
+  }
+  throw std::invalid_argument("Missing backboard_pitch resource in robot description");
+}
+} // namespace
 
 controller_interface::InterfaceConfiguration
 InvertedPendulumController::state_interface_configuration() const {
@@ -39,7 +57,7 @@ Callback InvertedPendulumController::on_init() {
     auto_declare("viscosity", defaults.viscosity);
     auto_declare("mass", defaults.mass);
     auto_declare("height", defaults.height);
-    auto_declare("max_backboard_rate_rad_s", defaults.max_backboard_rate_rad_s);
+    auto_declare("max_backboard_rate_rad_s", 0.);
     auto_declare("is_male", defaults.is_male);
     parameter_guard_ = get_node()->add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter> &) {
@@ -66,13 +84,20 @@ InvertedPendulumController::on_configure(const rclcpp_lifecycle::State &) {
     parameters.viscosity = node->get_parameter("viscosity").as_double();
     parameters.mass = node->get_parameter("mass").as_double();
     parameters.height = node->get_parameter("height").as_double();
-    parameters.max_backboard_rate_rad_s =
+    const double requested_rate =
         node->get_parameter("max_backboard_rate_rad_s").as_double();
+    if (!std::isfinite(requested_rate) || requested_rate < 0.)
+      throw std::invalid_argument("max_backboard_rate_rad_s must be finite and nonnegative");
+    const double model_rate = backboard_rate_limit(get_robot_description());
+    parameters.max_backboard_rate_rad_s =
+        requested_rate == 0. ? model_rate : std::min(requested_rate, model_rate);
     parameters.is_male = node->get_parameter("is_male").as_bool();
     if (const auto *error = logic_.configure(parameters)) {
       RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
       return Callback::ERROR;
     }
+    RCLCPP_INFO(node->get_logger(), "Backboard velocity cap %.6f rad/s",
+                parameters.max_backboard_rate_rad_s);
   } catch (const std::exception &error) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error.what());
     return Callback::ERROR;

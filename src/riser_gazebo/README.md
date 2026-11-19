@@ -61,15 +61,21 @@ and is used directly by the plugin's `write()` and unit tests:
    `qdot=sdot/J(q)`. For top/bottom, q is the desired pitch angle. For torso/hip,
    q is the signed physical slide position. Previous physical references seed
    the inverse to maintain branch continuity. Both reference positions AND
-   reference velocities are converted, even in velocity mode; no second angular
-   integration is performed.
+   reference velocities are converted. If an actuator velocity request would
+   exceed the physical pitch rate, cap the pitch increment and velocity and
+   map the accepted pair back to stroke.
 3. **Step 1, angular mode:** use the checked angular pitch targets directly and
    `LateralCoupling::forward()` to expand ML into torso/hip slide targets. Use
    `Axis::forward(q,qdot)` to obtain matching actuator references and rates.
 4. Check transformed pitch references against mechanical position and angular
-   velocity bounds, and all actuator references against stroke and rate bounds. On failure, commit no partial reference update;
-   `write()` zeros drive commands and returns an error. It does not independently
-   clamp a converted velocity, which would break `sdot=J*qdot`.
+   velocity bounds, and all actuator references against stroke bounds. The
+   native pitch-actuator speed caps apply in actuator mode. Pitch stroke rates
+   in angular mode are derived diagnostics. On a mapping error, `write()`
+   zeros drive commands and commits no reference update.
+
+An active simulated actuator switch stops a velocity command toward that
+switch. The angular ML command stops as a pair if either slide reaches its
+switch. Reverse motion remains available.
 
 Actuator-mode torso/hip targets must **not** go through a common ML angle: that
 would discard independent motion and prevent calibration. The fitted ML reference
@@ -165,10 +171,10 @@ These are fixed geometric offsets, not encoder calibration.
 
 | Actuator | Lower stroke (m) | Upper stroke (m) | Velocity cap (m/s) |
 | --- | ---: | ---: | ---: |
-| Top | -0.335 | +0.335 | 0.02 |
-| Torso | -0.335 | +0.335 | 0.02 |
-| Hip | -0.335 | +0.335 | 0.02 |
-| Bottom | -0.08 | +0.24 | 0.01 |
+| Top | -0.335 | +0.335 | 0.67 |
+| Torso | -0.335 | +0.335 | 0.67 |
+| Hip | -0.335 | +0.335 | 0.67 |
+| Bottom | -0.08 | +0.24 | 0.32 |
 
 These estimated switch-to-switch ranges come from the user's approximate stroke
 measurements and neutral assumptions. Canonical linkage inversion gives backboard
@@ -176,11 +182,17 @@ pitch approximately [-13.18,+12.40] degrees and footplate [-27.42,+12.65] degree
 Coupled ML spans +/-13.95 degrees. Both command families use these geometric
 position bounds; no additional angular software-limit layer is implemented.
 
-Backboard/footplate/ML rate caps are respectively 0.012, 0.01 and approximately
-0.01383 rad/s. Transformed checks still reject actuator commands whose inverse
-rates exceed those angular caps. Reference limits do not guarantee actual
-tracking speed; use time-parameterized trajectories instead of position steps.
-Effort config values do not install an actuator-force limiter.
+The Gazebo physical pitch and slide caps are each axis's travel divided by
+one simulated second. Backboard and footplate command caps are the same as
+their physical caps, about 0.4464 and 0.6993 rad/s. The ML rate cap is about
+0.4633 rad/s and keeps both expanded slide rates within 0.67 m/s across its
+range. The pendulum reads the backboard cap from the same ros2_control
+description. A positive `max_backboard_rate_rad_s` parameter can reduce the
+cap for an experiment.
+The nonlinear pitch-to-stroke mapping can make a traverse in actuator mode
+take longer as the physical angular cap becomes active. Actual tracking
+depends on the servo, load, and approach to the switches. Use time-parameterized
+trajectories for position commands.
 
 The direct-pitch dynamics tables still cover CAD q = +/-0.08 rad. Lookup adds the
 pitch neutral offset, interpolates inside the table and holds endpoint

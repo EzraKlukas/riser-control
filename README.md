@@ -84,15 +84,15 @@ Keep those bounds consistent with `src/riser_bringup/urdf/model/kinematics.yaml`
 Targets are clamped to those bounds while waiting for switches; each phase has
 a 180-second simulation-time timeout. A missing switch stops the sequence and
 leaves the last position commands applied. Reactivating restarts calibration.
-Launching with `calibrate:=true` caps each moving Gazebo joint's speed at its
-full physical travel per simulated second. The default ramps of 0.45 m/s for
+Gazebo caps each physical joint's speed at its full travel per simulated second
+in every command mode. The default calibration ramps of 0.45 m/s for
 top, torso and hip and 0.22 m/s for bottom budget about 12 simulated seconds of
 nominal travel from neutral. Servo tracking and switch detection affect the
 actual duration. Wall-clock duration also depends on Gazebo's real-time factor.
 
 You can switch to calibration in a running Gazebo session. In the example below,
-the default angular position controller is active. The physical velocity limits
-are set at launch. Start with `calibrate:=true` for the fast homing limits.
+the default angular position controller is active. Use `calibrate:=true` to
+start directly in calibration.
 
 ```bash
 ros2 run controller_manager spawner calibration_controller --inactive \
@@ -165,6 +165,10 @@ gz topic -e -t /riser/human_balance
 Telemetry reports simulation time, body pitch, backboard pitch, footplate pitch,
 ankle torque, strap torque, and a balance-active flag, in that order. Angles are
 in radians and torques are in N m.
+
+To add a multisine or play a CSV torque signal while the participant balances,
+follow the [AP perturbation tutorial](src/riser_bringup/config/perturbation-tutorial.md).
+It includes the 25 Hz PlotJuggler stream and the ros2_control introspection example.
 
 ## Force plates and model details
 

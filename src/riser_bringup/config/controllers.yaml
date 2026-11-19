@@ -19,6 +19,8 @@ controller_manager:
       type: riser_inverted_pendulum/InvertedPendulumController
     ankle_wrench_state_broadcaster:
       type: joint_state_broadcaster/JointStateBroadcaster
+    ankle_wrench_plot_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
 
 joint_state_broadcaster:
   ros__parameters:
@@ -78,10 +80,26 @@ ankle_wrench:
     ankle_wrench_gain: 1.0
     left_wrench_gain: 1.0
     right_wrench_gain: 1.0
+    perturbation:
+      multisine_peak_nm: 0.0
+      multisine_low_hz: 0.2
+      multisine_high_hz: 2.0
+      csv_path: ""
+      csv_sample_period_s: 0.001
 
 ankle_wrench_state_broadcaster:
   ros__parameters:
     joints: [ankle_wrench]
     interfaces: [force.x, force.y, force.z, torque.x, torque.y, torque.z, sample_time, valid]
+    use_urdf_to_filter: false
+    use_local_topics: true
+
+ankle_wrench_plot_broadcaster:
+  ros__parameters:
+    update_rate: 25
+    joints: [ankle_wrench]
+    interfaces: [force.x, force.y, force.z, torque.x, torque.y, torque.z,
+                 torque.x_before_perturbation, subject_mass_kg, sample_time, valid]
+    frame_id: ankle_wrench
     use_urdf_to_filter: false
     use_local_topics: true

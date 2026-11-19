@@ -67,6 +67,13 @@ private:
   hardware_interface::LoanedStateInterface *read_time_interface_ = nullptr;
   hardware_interface::LoanedStateInterface *foot_pitch_interface_ = nullptr;
   std::atomic<bool> active_{false};
+  enum class Playback { Idle, Requested, Running };
+  std::atomic<Playback> playback_{Playback::Idle};
+  std::atomic<bool> csv_configured_{false};
+  std::atomic<bool> multisine_configured_{false};
+  std::atomic<bool> multisine_enabled_{false};
+  rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr play_csv_service_;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr multisine_service_;
   double subject_mass_state_ = 0.;
   // The update thread owns logic_ and exported state. The ROS executor owns the
   // deferred reply; these atomics carry the request and result between them.

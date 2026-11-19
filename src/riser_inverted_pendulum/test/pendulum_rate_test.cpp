@@ -3,7 +3,10 @@
 int main() {
   using namespace riser_inverted_pendulum_controller;
   logic::InvertedPendulumLogic model;
-  if (model.configure({}) || model.activate(70.))
+  constexpr double test_rate_limit = 0.02;
+  logic::Parameters parameters;
+  parameters.max_backboard_rate_rad_s = test_rate_limit;
+  if (model.configure(parameters) || model.activate(70.))
     return 1;
 
   logic::Inputs inputs{};
@@ -15,10 +18,10 @@ int main() {
       std::abs(second.velocity_commands[THETA_BB] - 3. * rate) > 1e-12)
     return 1;
 
-  if (model.update(inputs, 1.1, 0.1).velocity_commands[THETA_BB] != 0.012)
+  if (model.update(inputs, 1.1, 0.1).velocity_commands[THETA_BB] != test_rate_limit)
     return 1;
   inputs.ankle_wrench.T_x = -30.;
-  if (model.update(inputs, 1.101, 0.001).velocity_commands[THETA_BB] >= 0.012)
+  if (model.update(inputs, 1.101, 0.001).velocity_commands[THETA_BB] >= test_rate_limit)
     return 1;
 
   model.deactivate();

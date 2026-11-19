@@ -48,6 +48,8 @@ def test_angular_interfaces_and_shared_geometry():
                         "velocity",
                         "effort",
                     ]
+            for limit in root.findall("joint/limit"):
+                limit.attrib.pop("velocity", None)
             signatures.append([E.tostring(j) for j in root.findall("joint")])
     assert all(s == signatures[0] for s in signatures)
 
@@ -112,24 +114,29 @@ def test_direct_pitch_model():
         ("ethercat", "position"),
     ],
 )
-def test_calibration_physics_velocity_limits(backend, mode):
+def test_backend_velocity_limits(backend, mode):
     share = Path(get_package_share_directory("riser_bringup"))
     model = str(share / "urdf/riser.urdf.xacro")
     mappings = {"backend": backend, "command_mode": mode}
-    standard = E.fromstring(xacro.process_file(model, mappings=mappings).toxml())
-    calibration = E.fromstring(
-        xacro.process_file(model, mappings={**mappings, "calibrate": "true"}).toxml()
-    )
-    assert E.tostring(standard.find("ros2_control")) == E.tostring(
-        calibration.find("ros2_control")
-    )
-    fast = backend == "gazebo" and mode == "actuator_position"
-    for name in ("backboard_pitch", "torso_lateral", "hip_lateral", "foot_plate_pitch"):
-        path = f"joint[@name='{name}']/limit"
-        expected = standard.find(path).attrib.copy()
-        if fast:
-            expected["velocity"] = str(float(expected["upper"]) - float(expected["lower"]))
-        assert calibration.find(path).attrib == expected
+    root = E.fromstring(xacro.process_file(model, mappings=mappings).toxml())
+    k = json.loads((share / "urdf/model/kinematics.yaml").read_text())["joints"]
+    for name, axis in (
+        ("backboard_pitch", "frame_pitch"),
+        ("torso_lateral", "torso_lateral"),
+        ("hip_lateral", "hip_lateral"),
+        ("foot_plate_pitch", "foot_pitch"),
+    ):
+        physical = root.find(f"joint[@name='{name}']/limit")
+        config = k[axis]
+        expected = config["velocity"]
+        if backend == "gazebo":
+            expected = config["upper"] - config["lower"]
+        assert float(physical.get("velocity")) == expected
+        assert float(physical.get("lower")) == config["lower"]
+        assert float(physical.get("upper")) == config["upper"]
+        if name in ("backboard_pitch", "foot_plate_pitch"):
+            control = root.find(f"ros2_control/joint[@name='{name}']")
+            assert float(control.find("param[@name='velocity_limit']").text) == expected
 
 
 def test_neutral_frames_and_geometric_limits():
@@ -155,7 +162,9 @@ def test_neutral_frames_and_geometric_limits():
         assert float(joint.find('limit').get('upper')) == .335
     ml = root.find("joint[@name='ml_angle']/limit")
     assert float(ml.get('upper')) == c['ml']['limit_rad']
-    assert float(ml.get('velocity')) == c['ml']['velocity_rad_s']
+    assert float(ml.get('velocity')) == c['ml']['velocity_rad_s'] * (0.67 / 0.02)
+    ml_control = root.find("ros2_control/joint[@name='ml_angle']")
+    assert float(ml_control.find("param[@name='velocity_limit']").text) == float(ml.get('velocity'))
 
 
 @pytest.mark.parametrize("backend", ["mock", "gazebo", "ethercat"])
@@ -182,5 +191,6 @@ def test_gazebo_startup_modes(mode):
     k = json.loads((share / "urdf/model/kinematics.yaml").read_text())["joints"]
     for gpio in root.findall("ros2_control/gpio"):
         limits = k[gpio.get("name")]
-        for parameter, key in [("lower", "lower"), ("upper", "upper"), ("velocity_limit", "velocity")]:
-            assert float(gpio.find(f"param[@name='{parameter}']").text) == limits[key]
+        for key in ("lower", "upper"):
+            assert float(gpio.find(f"param[@name='{key}']").text) == limits[key]
+        assert float(gpio.find("param[@name='velocity_limit']").text) == limits["upper"] - limits["lower"]

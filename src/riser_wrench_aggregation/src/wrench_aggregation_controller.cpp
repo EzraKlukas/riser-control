@@ -1,6 +1,9 @@
 #include "riser_wrench_aggregation/wrench_aggregation_controller.hpp"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <hardware_interface/introspection.hpp>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace riser_wrench_aggregation {
@@ -10,7 +13,35 @@ using Return = controller_interface::return_type;
 namespace {
 constexpr auto FootPitch = "foot_plate_pitch/position";
 constexpr auto SubjectMass = "subject_mass_kg";
+constexpr auto TorqueBefore = "torque.x_before_perturbation";
 static_assert(std::atomic<double>::is_always_lock_free);
+
+std::vector<double> load_csv(const std::string &path) {
+  if (path.empty())
+    return {};
+  if (!std::filesystem::path(path).is_absolute())
+    throw std::runtime_error("perturbation.csv_path must be absolute");
+  std::ifstream file(path);
+  if (!file)
+    throw std::runtime_error("Cannot open perturbation CSV: " + path);
+  std::vector<double> samples;
+  for (std::string line; std::getline(file, line);) {
+    try {
+      std::size_t consumed = 0;
+      const double value = std::stod(line, &consumed);
+      if (line.find_first_not_of(" \t\r", consumed) != std::string::npos ||
+          !std::isfinite(value))
+        throw std::invalid_argument("invalid torque sample");
+      samples.push_back(value);
+    } catch (const std::logic_error &) {
+      throw std::runtime_error("Invalid perturbation CSV sample at line " +
+                               std::to_string(samples.size() + 1));
+    }
+  }
+  if (file.bad() || samples.empty())
+    throw std::runtime_error("Perturbation CSV is empty or unreadable: " + path);
+  return samples;
+}
 } // namespace
 
 controller_interface::InterfaceConfiguration
@@ -39,6 +70,8 @@ WrenchAggregationController::on_export_state_interfaces_list() {
         get_name(), WrenchInterfaceNames[i], &output_values_[i]));
   interfaces.push_back(std::make_shared<hardware_interface::StateInterface>(
       get_name(), SubjectMass, &subject_mass_state_));
+  interfaces.push_back(std::make_shared<hardware_interface::StateInterface>(
+      get_name(), TorqueBefore, &logic_.torque_x_before_perturbation()));
   return interfaces;
 }
 
@@ -67,6 +100,12 @@ Callback WrenchAggregationController::on_init() {
     auto_declare("right_wrench_transformation",
                  defaults.right.linear_transform);
     auto_declare("read_time_interface", std::string{});
+    const logic::PerturbationParameters perturbation;
+    auto_declare("perturbation.multisine_peak_nm", perturbation.multisine_peak_nm);
+    auto_declare("perturbation.multisine_low_hz", perturbation.multisine_low_hz);
+    auto_declare("perturbation.multisine_high_hz", perturbation.multisine_high_hz);
+    auto_declare("perturbation.csv_sample_period_s", perturbation.csv_sample_period_s);
+    auto_declare("perturbation.csv_path", std::string{});
     const auto node = get_node();
     rcl_interfaces::msg::ParameterDescriptor mass_descriptor;
     mass_descriptor.description =
@@ -96,6 +135,29 @@ Callback WrenchAggregationController::on_init() {
         });
     using Tare = std_srvs::srv::SetBool;
     using Mass = std_srvs::srv::Trigger;
+    play_csv_service_ = node->create_service<Mass>(
+        "~/play_perturbation", [this](const Mass::Request::SharedPtr,
+                                     Mass::Response::SharedPtr response) {
+          if (!active_.load() || !csv_configured_.load()) {
+            response->message = "Activate the controller with a configured CSV";
+            return;
+          }
+          auto idle = Playback::Idle;
+          response->success = playback_.compare_exchange_strong(idle, Playback::Requested);
+          response->message = response->success ? "CSV queued for the next update"
+                                                : "CSV playback is already busy";
+        });
+    multisine_service_ = node->create_service<Tare>(
+        "~/set_multisine", [this](const Tare::Request::SharedPtr request,
+                                  Tare::Response::SharedPtr response) {
+          if (!active_.load() || (request->data && !multisine_configured_.load())) {
+            response->message = "Activate the controller with a nonzero multisine peak";
+            return;
+          }
+          multisine_enabled_.store(request->data);
+          response->success = true;
+          response->message = request->data ? "Multisine enabled" : "Multisine disabled";
+        });
     tare_service_ = node->create_service<Tare>(
         "~/tare", [this](std::shared_ptr<rmw_request_id_t> header,
                          std::shared_ptr<Tare::Request> request) {
@@ -220,12 +282,29 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
     parameters.matrix_transformation =
         node->get_parameter("matrix_transformation").as_bool();
     parameters.scaling = node->get_parameter("scaling").as_bool();
-    if (const auto *error = logic_.configure(parameters)) {
+    logic::PerturbationParameters perturbation;
+    perturbation.multisine_peak_nm =
+        node->get_parameter("perturbation.multisine_peak_nm").as_double();
+    perturbation.multisine_low_hz =
+        node->get_parameter("perturbation.multisine_low_hz").as_double();
+    perturbation.multisine_high_hz =
+        node->get_parameter("perturbation.multisine_high_hz").as_double();
+    perturbation.csv_sample_period_s =
+        node->get_parameter("perturbation.csv_sample_period_s").as_double();
+    perturbation.csv = load_csv(node->get_parameter("perturbation.csv_path").as_string());
+    const bool csv_configured = !perturbation.csv.empty();
+    const bool multisine_configured = perturbation.multisine_peak_nm > 0.;
+    if (const auto *error = logic_.configure(parameters, std::move(perturbation))) {
       RCLCPP_ERROR(node->get_logger(), "%s", error);
       return Callback::ERROR;
     }
     read_time_interface_name_ =
         node->get_parameter("read_time_interface").as_string();
+    csv_configured_.store(csv_configured);
+    multisine_configured_.store(multisine_configured);
+    logic_.register_introspection([this](const char *name, const double *value) {
+      REGISTER_ROS2_CONTROL_INTROSPECTION(name, value)
+    });
     subject_mass_state_ = 0.;
     measured_mass_kg_.store(subject_mass_state_);
     publish_sample({});
@@ -337,6 +416,8 @@ void WrenchAggregationController::publish_sample(
 
 void WrenchAggregationController::reset() {
   active_.store(false);
+  multisine_enabled_.store(false);
+  playback_.store(Playback::Idle);
   const auto queued = capture_request_.exchange(logic::Capture::None);
   if (queued != logic::Capture::None || logic_.capture_active())
     capture_result_.store(logic::CaptureResult::Cancelled);
@@ -370,8 +451,14 @@ Return WrenchAggregationController::update_and_write_commands(
       logic_.capture_needs_flat_plate()
           ? foot_pitch_interface_->get_optional(1).value_or(logic::Unavailable)
           : logic::Unavailable;
-  const auto result =
-      logic_.update(inputs, read_time_s, foot_pitch_rad);
+  const auto playback = playback_.load();
+  if (playback == Playback::Requested)
+    playback_.store(Playback::Running);
+  const auto result = logic_.update(inputs, read_time_s, foot_pitch_rad,
+                                    multisine_enabled_.load(),
+                                    playback == Playback::Requested);
+  if (playback != Playback::Idle && !logic_.csv_playing())
+    playback_.store(Playback::Idle);
   publish_sample(result.output);
   if (result.capture != logic::CaptureResult::Pending) {
     subject_mass_state_ = logic_.subject_mass_kg();

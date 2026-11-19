@@ -194,6 +194,26 @@ public:
           return mapped.error;
         q[i] = mapped.position - neutral_cad_[i];
         qdot[i] = mapped.velocity;
+        if (velocity(mode) && (i == kin::FramePitch || i == kin::FootPitch)) {
+          // Stroke and pitch have different Jacobians along their travel.
+          // Limit physical travel per step and remap the accepted reference.
+          const auto pitch = (i == kin::FramePitch) ? Backboard : FootPlate;
+          const double cap = limits_[pitch].velocity;
+          const double step = cap * dt;
+          const double target = std::clamp(q[i], physical[i] - step,
+                                           physical[i] + step);
+          if (target != q[i] || std::abs(qdot[i]) > cap) {
+            q[i] = target;
+            const auto accepted = axes_[i].forward(q[i] + neutral_cad_[i]);
+            if (!accepted)
+              return accepted.error;
+            const double rate_cap =
+                std::min(cap, limits_[j].velocity / std::abs(accepted.jacobian));
+            qdot[i] = std::clamp(qdot[i], -rate_cap, rate_cap);
+            p[j] = accepted.position - neutral_stroke_[i];
+            v[j] = accepted.jacobian * qdot[i];
+          }
+        }
       }
       p[Backboard] = q[kin::FramePitch];
       v[Backboard] = qdot[kin::FramePitch];
@@ -226,14 +246,17 @@ public:
         v[PublicForAxis[i]] = mapped.velocity;
       }
     }
-    // Recheck transformed references in both unit systems. Reject an invalid
-    // conversion rather than clamping qdot independently of its actuator rate.
+    // Pitch stroke rates derived from angular commands are diagnostic. Their
+    // native actuator command caps do not constrain the angular command family.
     if (!bounded(Backboard, p[Backboard], v[Backboard]) ||
         !bounded(FootPlate, p[FootPlate], v[FootPlate]))
       return kin::Error::OutsideDomain;
-    for (const auto j : PublicForAxis)
-      if (!bounded(j, p[j], v[j]))
+    for (const auto j : PublicForAxis) {
+      const bool derived_pitch = angular(mode) &&
+                                 (j == TopActuator || j == BottomActuator);
+      if (!std::isfinite(v[j]) || !bounded(j, p[j], derived_pitch ? 0. : v[j]))
         return kin::Error::OutsideDomain;
+    }
     position = p;
     rate = v;
     physical = q;

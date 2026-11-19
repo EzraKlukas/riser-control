@@ -17,7 +17,7 @@
     "state_estimate": "atan((h_t*y_t+h_h*y_h)/(h_t^2+h_h^2))",
     "effort": "tau_ml = sum(h_i sec(theta_ml)^2 F_i), N m",
     "stance_width_model": false,
-    "velocity_note": "Conservative simulation rate: h_max * sec(limit_rad)^2 * velocity_rad_s <= 0.02 m/s.",
+    "velocity_note": "Baseline rate, scaled to the slide limits in Gazebo: h_max * sec(limit_rad)^2 * velocity_rad_s <= 0.02 m/s.",
     "limit_note": "Derived from measured +/-0.335 m independent slide travel: min atan(slide_limit/h_i)."
   },
   "servo": {
