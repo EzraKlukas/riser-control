@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -15,7 +16,6 @@ enum JointIndices { THETA_BB, THETA_ML, THETA_FP };
 namespace riser_inverted_pendulum_controller::logic {
 
 inline constexpr double Unavailable = std::numeric_limits<double>::quiet_NaN();
-inline constexpr double dt = 0.001; // seconds
 
 struct TorqueSample {
   double T_x, T_y, sample_time_s = Unavailable;
@@ -37,9 +37,10 @@ struct UpdateResult {
 };
 
 struct Parameters {
-  double viscosity = 0.; // kg / (m s)
+  double viscosity = 0.; // N m s / rad
   double mass = 0.;      // kg. Zero selects the provider's measured mass.
   double height = 1.80;
+  double max_backboard_rate_rad_s = 0.012;
   bool is_male = true;   // for gender-based constants.
   // to add and implement later: inertia gain, footplate scaling, backboard
   // scaling, ml scaling, b scaling, gravity, halt-based params, ankle width,
@@ -52,6 +53,7 @@ struct Configuration {
   double gravity = 9.81;
   double mass = 0.;
   double inertia = 0.;
+  double max_backboard_rate_rad_s = 0.;
   double com_height = 0.; // relative to floor
 
   bool ml = true;
@@ -68,6 +70,9 @@ public:
       return "Height, viscosity, mass must be finite.";
     if (p.height <= 0 || p.mass < 0)
       return "Height must be positive and the mass override nonnegative.";
+    if (!std::isfinite(p.max_backboard_rate_rad_s) ||
+        p.max_backboard_rate_rad_s <= 0.)
+      return "Maximum backboard rate must be positive and finite.";
 
     parameters_ = p;
     configured_ = true;
@@ -84,11 +89,13 @@ public:
     Configuration next;
     next.viscosity = p.viscosity;
     next.mass = mass;
+    next.max_backboard_rate_rad_s = p.max_backboard_rate_rad_s;
     next.com_height = (p.is_male ? 0.56 : 0.54) * p.height;
     next.inertia = (p.is_male ? 0.35 : 0.33) * mass * (p.height * p.height);
     if (!std::isfinite(next.inertia) || next.inertia <= 0.)
       return "Calculated inertia must be positive and finite";
     configuration_ = next;
+    backboard_rate_command_rad_s_ = 0.;
     active_ = true;
     return nullptr;
   }
@@ -98,7 +105,7 @@ public:
   void deactivate() { active_ = false; }
 
   UpdateResult update(const Inputs &inputs, double time_s,
-                      double period_s) const {
+                      double period_s) {
     UpdateResult result;
     if (!active_ || !inputs.ankle_wrench.valid ||
         !std::isfinite(inputs.ankle_wrench.T_x) ||
@@ -109,28 +116,29 @@ public:
       result.error = "Invalid state for the inverted pendulum";
       return result;
     }
-    // convention: dot, ddot = first, second derivative.
-    double theta_bb = inputs.theta_bb.position;
-    double theta_dot_bb = inputs.theta_bb.velocity;
-    double theta_ddot_bb = 0.;
-
     const Configuration &c = configuration_;
-    theta_ddot_bb = ((0.971 * c.mass * c.gravity * c.com_height) * theta_bb -
-                     c.viscosity * theta_dot_bb + inputs.ankle_wrench.T_x) /
-                    c.inertia;
-
-    theta_dot_bb += theta_ddot_bb * dt;
-    if (!std::isfinite(theta_dot_bb)) {
+    const double acceleration_rad_s2 =
+        (0.971 * c.mass * c.gravity * c.com_height * inputs.theta_bb.position -
+         c.viscosity * backboard_rate_command_rad_s_ + inputs.ankle_wrench.T_x) /
+        c.inertia;
+    const double next_rate_rad_s =
+        backboard_rate_command_rad_s_ + acceleration_rad_s2 * period_s;
+    if (!std::isfinite(next_rate_rad_s)) {
       result.error = "Calculated backboard command is nonfinite";
       return result;
     }
-    result.velocity_commands[THETA_BB] = theta_dot_bb;
+    // Keep the applied model rate as state so a saturated command cannot
+    // accumulate a larger rate behind the Gazebo actuator limit.
+    backboard_rate_command_rad_s_ = std::clamp(
+        next_rate_rad_s, -c.max_backboard_rate_rad_s, c.max_backboard_rate_rad_s);
+    result.velocity_commands[THETA_BB] = backboard_rate_command_rad_s_;
     return result;
   }
 
 private:
   bool active_ = false;
   bool configured_ = false;
+  double backboard_rate_command_rad_s_ = 0.;
   Parameters parameters_;
   Configuration configuration_;
 };

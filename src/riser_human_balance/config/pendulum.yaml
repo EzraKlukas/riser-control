@@ -1,0 +1,5 @@
+inverted_pendulum:
+  ros__parameters:
+    height: 1.7
+    # Sagittal model damping in N m s/rad for the Gazebo participant trial.
+    viscosity: 250.0

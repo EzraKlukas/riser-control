@@ -39,6 +39,7 @@ Callback InvertedPendulumController::on_init() {
     auto_declare("viscosity", defaults.viscosity);
     auto_declare("mass", defaults.mass);
     auto_declare("height", defaults.height);
+    auto_declare("max_backboard_rate_rad_s", defaults.max_backboard_rate_rad_s);
     auto_declare("is_male", defaults.is_male);
     parameter_guard_ = get_node()->add_on_set_parameters_callback(
         [this](const std::vector<rclcpp::Parameter> &) {
@@ -65,6 +66,8 @@ InvertedPendulumController::on_configure(const rclcpp_lifecycle::State &) {
     parameters.viscosity = node->get_parameter("viscosity").as_double();
     parameters.mass = node->get_parameter("mass").as_double();
     parameters.height = node->get_parameter("height").as_double();
+    parameters.max_backboard_rate_rad_s =
+        node->get_parameter("max_backboard_rate_rad_s").as_double();
     parameters.is_male = node->get_parameter("is_male").as_bool();
     if (const auto *error = logic_.configure(parameters)) {
       RCLCPP_ERROR(get_node()->get_logger(), "%s", error);

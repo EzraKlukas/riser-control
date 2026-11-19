@@ -19,4 +19,12 @@ pluginlib_export_plugin_description_file(controller_interface plugins.xml)
 install(TARGETS inverted_pendulum_controller LIBRARY DESTINATION lib)
 install(DIRECTORY include/ DESTINATION include)
 
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(pendulum_rate_test test/pendulum_rate_test.cpp)
+  target_include_directories(pendulum_rate_test PRIVATE include)
+  target_compile_features(pendulum_rate_test PRIVATE cxx_std_17)
+  add_test(NAME pendulum_rate COMMAND pendulum_rate_test)
+endif()
+
 ament_package()

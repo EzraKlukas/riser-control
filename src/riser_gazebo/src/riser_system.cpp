@@ -509,6 +509,9 @@ public:
       if (state_ready_)
         seed_references();
       command_mode_.store(change->mode);
+      ecm_->Component<PhysicsClockComponent>(model_entity_)
+          ->Data().angular_velocity_active =
+          active_ && change->mode == CommandMode::AngularVelocity;
     }
     return ReturnType::OK;
   }
@@ -518,11 +521,16 @@ public:
     references_seeded_ = false;
     if (state_ready_)
       seed_references();
+    ecm_->Component<PhysicsClockComponent>(model_entity_)
+        ->Data().angular_velocity_active =
+        command_mode_.load() == CommandMode::AngularVelocity;
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   hardware_interface::CallbackReturn
   on_deactivate(const rclcpp_lifecycle::State &) override {
     active_ = false;
+    ecm_->Component<PhysicsClockComponent>(model_entity_)
+        ->Data().angular_velocity_active = false;
     zero_drive_efforts();
     return hardware_interface::CallbackReturn::SUCCESS;
   }

@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="riser_participant" canonical_link="feet">
+    <!-- Ankle origin coincides with the RISER sagittal pivot. Soles sit
+         85.09 mm below it. Both feet form one rigid base in this AP model. -->
+    <link name="feet">
+      <inertial>
+        <pose>0.075 0 -0.06 0 0 0</pose>
+        <mass>2</mass>
+        <inertia><ixx>0.038</ixx><iyy>0.013</iyy><izz>0.05</izz></inertia>
+      </inertial>
+      <visual name="left_foot">
+        <pose>0.075 0.127 -0.06009 0 0 0</pose>
+        <geometry><box><size>0.26 0.095 0.05</size></box></geometry>
+        <material><diffuse>0.12 0.15 0.19 1</diffuse></material>
+      </visual>
+      <visual name="right_foot">
+        <pose>0.075 -0.127 -0.06009 0 0 0</pose>
+        <geometry><box><size>0.26 0.095 0.05</size></box></geometry>
+        <material><diffuse>0.12 0.15 0.19 1</diffuse></material>
+      </visual>
+    </link>
+    <link name="body">
+      <inertial>
+        <pose>0 0 0.87 0 0 0</pose>
+        <mass>68</mass>
+        <inertia><ixx>15</ixx><iyy>15</iyy><izz>2</izz></inertia>
+      </inertial>
+      <visual name="left_leg">
+        <pose>0 0.127 0.405 0 0 0</pose>
+        <geometry><capsule><radius>0.065</radius><length>0.74</length></capsule></geometry>
+        <material><diffuse>0.22 0.31 0.43 1</diffuse></material>
+      </visual>
+      <visual name="right_leg">
+        <pose>0 -0.127 0.405 0 0 0</pose>
+        <geometry><capsule><radius>0.065</radius><length>0.74</length></capsule></geometry>
+        <material><diffuse>0.22 0.31 0.43 1</diffuse></material>
+      </visual>
+      <visual name="torso">
+        <pose>0 0 1.06 0 0 0</pose>
+        <geometry><box><size>0.18 0.39 0.55</size></box></geometry>
+        <material><diffuse>0.12 0.52 0.42 1</diffuse></material>
+      </visual>
+      <visual name="head">
+        <pose>0 0 1.50 0 0 0</pose>
+        <geometry><sphere><radius>0.11491</radius></sphere></geometry>
+        <material><diffuse>0.65 0.46 0.32 1</diffuse></material>
+      </visual>
+    </link>
+    <joint name="ankle" type="revolute">
+      <parent>feet</parent>
+      <child>body</child>
+      <axis>
+        <xyz>0 1 0</xyz>
+        <limit><lower>-0.30</lower><upper>0.30</upper><effort>120</effort></limit>
+      </axis>
+    </joint>
+    <plugin filename="libriser_human_balance.so" name="riser_human_balance::HumanBalanceSystem">
+      <pulse_nm>0</pulse_nm>
+    </plugin>
+  </model>
+</sdf>

@@ -111,6 +111,61 @@ and failure logging can block, so this is not a hard realtime hardware controlle
 See the [controller registration guide](src/riser_bringup/config/README.md#registering-a-controller)
 for the package, YAML and launch steps to add future controllers.
 
+## Simulated participant
+
+Launch Gazebo with participant support while leaving the platform empty.
+
+```bash
+ros2 launch riser_bringup control.launch.py backend:=gazebo \
+  command_mode:=actuator_position calibrate:=true human:=true \
+  plot:=false wrench_input:=false
+```
+
+Add `headless:=true` for a numerical run. Wait for all four actuators to
+reach home and settle before taring the empty platform. Then spawn the
+participant, measure its mass, and capture the standing tare.
+
+```bash
+ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: true}'
+ros2 run riser_human_balance spawn_participant --pulse-nm 18
+ros2 service call /ankle_wrench/measure_mass std_srvs/srv/Trigger '{}'
+ros2 param get /ankle_wrench subject_mass_kg
+ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: false}'
+```
+
+Wait for each service to complete successfully. The participant is 1.70 m tall
+and has 70 kg of Gazebo rigid-body mass. Its two visible feet form a single
+rigid base welded to the left instrumented plate, so use the **summed** wrench
+for weighing. The body has one sagittal ankle hinge. A pitch spring and damper
+act between the body and board and leave the weight supported through the feet.
+The footplate is held at its home pitch, and ML balance is outside this model.
+
+Load the robot pendulum with the matching height, then release both controllers
+with one switch. The participant starts ankle balance on the first physics step
+in angular velocity mode. Keep calibration active until making this switch.
+
+```bash
+ros2 run controller_manager spawner inverted_pendulum --inactive \
+  --param-file "$(ros2 pkg prefix --share riser_human_balance)/config/pendulum.yaml"
+ros2 control switch_controllers --strict \
+  --deactivate calibration_controller --activate inverted_pendulum
+```
+
+The ankle controller uses upright angle and angular velocity feedback. The
+robot integrates the pendulum's backboard velocity with the controller period
+and caps it at the configured backboard rate. The optional pulse adds ankle
+torque for 0.65 simulated seconds to make recovery observable. Omit
+`--pulse-nm` for an unperturbed start. To repeat from empty, restart the
+launch. `human:=false` is the default.
+
+```bash
+gz topic -e -t /riser/human_balance
+```
+
+Telemetry reports simulation time, body pitch, backboard pitch, footplate pitch,
+ankle torque, strap torque, and a balance-active flag, in that order. Angles are
+in radians and torques are in N m.
+
 ## Force plates and model details
 
 The left and right `geometry_msgs/msg/WrenchStamped` topics are
@@ -161,6 +216,7 @@ backend is an unimplemented hardware boundary and refuses configuration.
 | `src/riser_gazebo/` | Physical actuation and reduced pitch dynamics. |
 | `src/riser_hardware/` | Hardware boundary and standalone actuator-mapping helpers. |
 | `src/riser_subject_simulation/` | Subject wrench world plugin, ROS bridge input and optional GUI. |
+| `src/riser_human_balance/` | Spawnable participant, sagittal ankle balance and pitch coupling. |
 | `evidence/` | Small offline linkage and actuator-mapping references. |
 
 [Configuration reference](src/riser_bringup/config/README.md) identifies

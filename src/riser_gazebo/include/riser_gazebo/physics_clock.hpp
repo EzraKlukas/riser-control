@@ -13,19 +13,23 @@ struct PhysicsClock {
   int64_t time_ns = 0;
   int64_t step_ns = 0;
   bool paused = true;
+  bool angular_velocity_active = false;
 
   bool operator==(const PhysicsClock &other) const {
     return time_ns == other.time_ns && step_ns == other.step_ns &&
-           paused == other.paused;
+           paused == other.paused &&
+           angular_velocity_active == other.angular_velocity_active;
   }
 };
 
 inline std::ostream &operator<<(std::ostream &stream,
                                 const PhysicsClock &clock) {
-  return stream << clock.time_ns << ' ' << clock.step_ns << ' ' << clock.paused;
+  return stream << clock.time_ns << ' ' << clock.step_ns << ' ' << clock.paused
+                << ' ' << clock.angular_velocity_active;
 }
 inline std::istream &operator>>(std::istream &stream, PhysicsClock &clock) {
-  return stream >> clock.time_ns >> clock.step_ns >> clock.paused;
+  return stream >> clock.time_ns >> clock.step_ns >> clock.paused >>
+         clock.angular_velocity_active;
 }
 
 using PhysicsClockComponent =

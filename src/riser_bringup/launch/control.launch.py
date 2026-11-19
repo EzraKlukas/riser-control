@@ -20,6 +20,9 @@ def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
     mode = LaunchConfiguration("command_mode").perform(context)
     calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
+    human = LaunchConfiguration("human").perform(context) == "true"
+    if human and backend != "gazebo":
+        raise ValueError("The simulated participant requires backend:=gazebo")
     if calibrate and (backend != "gazebo" or mode != "actuator_position"):
         raise ValueError("Calibration requires backend:=gazebo command_mode:=actuator_position")
     if mode.startswith("actuator_") and backend != "gazebo":
@@ -56,9 +59,12 @@ def setup(context):
     ]
     if sim:
         gz = Path(get_package_share_directory("ros_gz_sim"))
+        plugin_packages = ["riser_gazebo", "riser_subject_simulation"]
+        if human:
+            plugin_packages.append("riser_human_balance")
         plugin_dirs = [
             str(Path(get_package_share_directory(package)).parents[1] / "lib")
-            for package in ("riser_gazebo", "riser_subject_simulation")
+            for package in plugin_packages
         ]
         actions += [
             SetEnvironmentVariable(
@@ -177,6 +183,7 @@ def generate_launch_description():
                 "headless", default_value="false", choices=["true", "false"]
             ),
             DeclareLaunchArgument("force_plate_rate", default_value="1000"),
+            DeclareLaunchArgument("human", default_value="false", choices=["true", "false"]),
             DeclareLaunchArgument(
                 "calibrate", default_value="false", choices=["true", "false"]
             ),
