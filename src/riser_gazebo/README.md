@@ -18,8 +18,8 @@ allocation, blocking I/O or mutex acquisition; it runs in Gazebo's update phases
 ROS publication and transport still have their existing scheduling costs.
 
 `RiserSystem/read_time` is a read-only state in simulation seconds, describing the
-hardware read cycle. Controllers can use it to check sample age in the same
-clock as the sensor timestamps. The wrench controller selects this state with
+hardware read cycle. The wrench controller stamps the combined wrench with
+this state, selected by
 `read_time_interface`; no Gazebo-specific dependency is added to that controller.
 `/clock` remains available for ROS tools. Pause stops physics-time advancement.
 For a full reset, restart the launch. Gazebo's in-place full-world reset
@@ -128,9 +128,9 @@ the existing error path still logs and uses exceptions.
 
 The Gazebo backend declares `left_force_plate` and `right_force_plate` as
 ros2_control sensors. Each exports `force.x`, `force.y`, `force.z`, `torque.x`,
-`torque.y`, `torque.z`, `sample_time` and `valid`; for example, a controller can
-claim `left_force_plate/force.z`. There are 46 state handles in total: the existing 45 feedback handles plus
-`RiserSystem/read_time`. There are no additional command handles. Mock and EtherCAT resources are unchanged.
+`torque.y`, `torque.z` and `valid`. For example, a controller can claim
+`left_force_plate/force.z`. There are 44 state handles in total, including
+`RiserSystem/read_time`.
 
 Force and torque are in N and N m at each plate's top-surface centre. The state
 interfaces express both vectors in physical axes `(y_gz, x_gz, -z_gz)`. The
@@ -146,15 +146,11 @@ delivery is asynchronous, so a controller can still reuse a previous sample.
 There is no wall-clock delivery or synchronisation guarantee between the plates
 or joint feedback.
 
-`sample_time` is the original sensor timestamp in simulation seconds (NaN when
-absent). `valid` is 1 only for a complete finite sample dated no later than the
-current physics read-cycle time and no older than `sample_timeout`. Before the first
-sample, on malformed data, after a clock reset leaving a future-dated sample,
-or after timeout, `valid` is 0 and all six wrench values are NaN. Missing sensor
-data does not disable motion control; consuming controllers must check validity,
-age and left/right timestamp skew before using the wrench for control. Set
-`sample_timeout` in each sensor declaration in `backends.xacro` (default 0.1 s
-of simulation time). A paused simulation does not advance sample age.
+The backend uses Gazebo's source timestamps internally to detect stale or
+future-dated data. `valid` is 1 for a complete finite sample within the
+`sample_timeout` in `backends.xacro` (default 0.1 simulated seconds).
+Otherwise the six values are NaN and `valid` is 0. The ankle wrench combines
+the valid values from a read cycle and stamps them with `RiserSystem/read_time`.
 
 ## Neutral-relative bounds and CAD dynamics
 
@@ -211,22 +207,30 @@ accept `Float64MultiArray` commands. Actuator commands use m or m/s; angles use
 rad or rad/s. Mock and the unimplemented EtherCAT boundary retain three joints;
 actuator startup modes are currently supported only by Gazebo.
 
+## Runtime switching
+
+The launch argument selects the first controller. After launch, use
+`ros2 control switch_controllers --strict` to stop the old motion controller
+and start the new one in one request. The Gazebo backend accepts one complete
+command family at a time: all three angular positions, all three angular
+velocities, all four actuator positions, or all four actuator velocities.
+State consumers and broadcasters can remain active.
+
+`prepare_command_mode_switch()` checks the incoming and outgoing claim lists
+using the shared [RISER command policy](../riser_kinematics/include/riser_kinematics/command_mode.hpp).
+`perform_command_mode_switch()` applies the same check in the update thread,
+seeds position references from feedback, clears velocity commands, and sets
+the new family. This step uses fixed storage without blocking I/O. With no
+motion controller the Gazebo servo holds the measured physical pose captured
+at the switch. Angular mode couples the two lateral slides through the ML
+mapping. Let actuator homing settle before engaging angular mode so the slides
+are near the coupled neutral pose.
+
 ## Work still required before hardware operation
 
-Runtime switching is intentionally not implemented. All fourteen command handles
-exist, but only the startup-selected family is consumed. Do not manually activate
-another controller and assume its claims select a new hardware mode. Controller
-manager does not recognize overlap between ML and actuator resource names.
-
-Implement `prepare_command_mode_switch()` to validate the full proposed claim
-set `(current - stops) + starts`, reject overlapping angular/actuator claims and
-mixed position/velocity commands, and gate angular operation on valid homing and
-slide alignment. In `perform_command_mode_switch()`, commit the prepared mode and
-seed references from measured state with zero rates. This update-loop operation
-must be bounded, allocation-free and nonblocking. Stop/start the appropriate
-controllers in one strict switch request. Broadcasters may share state handles.
-
-EtherCAT remains unimplemented. Homing/encoder offsets, switch inputs and local
+An EtherCAT adapter can reuse the same claim policy and public resource names,
+then apply hardware-specific drive enable and reference seeding in its own mode
+hooks. The current EtherCAT boundary refuses activation. Homing/encoder offsets, switch inputs and local
 limit enforcement, communications-loss/watchdog behavior, verified speed and
 force limits, and measured loop latency are still required for hardware. The
 existing Gazebo loop also publishes ROS messages, creates component vectors and

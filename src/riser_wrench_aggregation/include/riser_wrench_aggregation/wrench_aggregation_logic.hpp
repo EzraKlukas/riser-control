@@ -21,9 +21,14 @@ struct WrenchSample {
   bool valid = false;
 };
 
+struct PlateSample {
+  Wrench wrench{};
+  bool valid = false;
+};
+
 struct Inputs {
-  WrenchSample left;
-  WrenchSample right;
+  PlateSample left;
+  PlateSample right;
 };
 
 // Variable-length parameter values are checked before conversion to fixed
@@ -44,8 +49,6 @@ struct Parameters {
   bool custom_transformation = true;
   bool matrix_transformation = true;
   bool scaling = true;
-  double max_sample_age_s = 0.1;
-  double max_sample_skew_s = 0.01;
 };
 
 struct PlateConfiguration {
@@ -63,13 +66,23 @@ struct Configuration {
   bool custom_transformation = true;
   bool matrix_transformation = true;
   bool scaling = true;
-  double max_sample_age_s = 0.1;
-  double max_sample_skew_s = 0.01;
+};
+
+enum class Capture { None, EmptyTare, StandingTare, Mass };
+enum class CaptureResult {
+  Pending,
+  Success,
+  InvalidSample,
+  NeedsEmptyTare,
+  PlateNotFlat,
+  NoLoad,
+  Cancelled
 };
 
 struct UpdateResult {
   WrenchSample output;
   const char *error = nullptr;
+  CaptureResult capture = CaptureResult::Pending;
 };
 
 inline bool finite(const Wrench &wrench) {
@@ -107,14 +120,6 @@ public:
         !std::isfinite(parameters.right.gain) ||
         !std::isfinite(parameters.ankle_gain))
       return "Wrench gains must be finite";
-    if (!std::isfinite(parameters.max_sample_age_s) ||
-        parameters.max_sample_age_s <= 0.)
-      return "Sample age must be positive and finite";
-
-    if (!std::isfinite(parameters.max_sample_skew_s) ||
-        parameters.max_sample_skew_s < 0.)
-      return "Sample skew must be nonnegative and finite";
-
     Configuration next;
     std::copy_n(parameters.left.ankle_to_origin.begin(), 3,
                 next.left.ankle_to_origin.begin());
@@ -134,39 +139,25 @@ public:
     next.custom_transformation = parameters.custom_transformation;
     next.matrix_transformation = parameters.matrix_transformation;
     next.scaling = parameters.scaling;
-    next.max_sample_age_s = parameters.max_sample_age_s;
-    next.max_sample_skew_s = parameters.max_sample_skew_s;
     configuration_ = next;
+    empty_tare_ = {};
+    offset_ = {};
+    has_empty_tare_ = false;
+    subject_mass_kg_ = 0.;
     configured_ = true;
     return nullptr;
   }
 
   const Configuration &configuration() const { return configuration_; }
 
-  const char *validate_sample(const WrenchSample &sample, double time_s) const {
-    if (!sample.valid || !finite(sample.wrench))
-      return "Wrench sample is unavailable or nonfinite";
-    if (!std::isfinite(sample.sample_time_s) || sample.sample_time_s < 0. ||
-        sample.sample_time_s > time_s + TimestampToleranceS)
-      return "Wrench timestamp is invalid or future-dated";
-    if (time_s - sample.sample_time_s >
-        configuration_.max_sample_age_s + TimestampToleranceS)
-      return "Wrench sample is stale";
-    return nullptr;
-  }
-
   const char *validate_inputs(const Inputs &inputs, double time_s) const {
     if (!configured_)
       return "Logic has not been configured";
     if (!std::isfinite(time_s) || time_s < 0.)
-      return "Invalid controller time";
-    if (const auto *error = validate_sample(inputs.left, time_s))
-      return error;
-    if (const auto *error = validate_sample(inputs.right, time_s))
-      return error;
-    if (std::abs(inputs.left.sample_time_s - inputs.right.sample_time_s) >
-        configuration_.max_sample_skew_s + TimestampToleranceS)
-      return "Plate sample timestamps differ beyond the configured limit";
+      return "Invalid read time";
+    if (!inputs.left.valid || !inputs.right.valid ||
+        !finite(inputs.left.wrench) || !finite(inputs.right.wrench))
+      return "Plate wrench is unavailable or nonfinite";
     return nullptr;
   }
 
@@ -179,33 +170,124 @@ public:
     return nullptr;
   }
 
-  void deactivate() { active_ = false; }
+  void deactivate() {
+    active_ = false;
+    capture_ = {};
+  }
 
-  UpdateResult update(const Inputs &inputs, double time_s,
-                      double period_s) const {
+  void begin_capture(Capture mode) {
+    capture_ = {};
+    capture_.mode = mode;
+  }
+
+  bool capture_active() const { return capture_.mode != Capture::None; }
+  bool capture_needs_flat_plate() const {
+    return capture_.mode == Capture::EmptyTare ||
+           capture_.mode == Capture::Mass;
+  }
+  double subject_mass_kg() const { return subject_mass_kg_; }
+
+  UpdateResult update(const Inputs &inputs, double read_time_s,
+                      double foot_pitch_rad = Unavailable) {
     if (!active_)
-      return {{}, "Logic is inactive"};
-    if (!std::isfinite(period_s) || period_s < 0.)
-      return {{}, "Invalid update period"};
-    if (const auto *error = validate_inputs(inputs, time_s))
-      return {{}, error};
-    auto output = compute_wrench(inputs);
-    if (const auto *error = validate_sample(output, time_s))
-      return {{}, error};
-    return {output, nullptr};
+      return invalid_update("Logic is inactive");
+    if (const auto *error = validate_inputs(inputs, read_time_s))
+      return invalid_update(error);
+    auto output = compute_wrench(inputs, read_time_s);
+    if (!finite(output.wrench))
+      return invalid_update("Aggregated wrench is nonfinite");
+    const auto capture = capture_active() ? collect(output, foot_pitch_rad)
+                                          : CaptureResult::Pending;
+    for (std::size_t i = 0; i < output.wrench.force.size(); ++i) {
+      output.wrench.force[i] -= offset_.force[i];
+      output.wrench.torque[i] -= offset_.torque[i];
+    }
+    if (!finite(output.wrench))
+      return {{}, "Tared wrench is nonfinite", capture};
+    return {output, nullptr, capture};
   }
 
 private:
-  WrenchSample compute_wrench(const Inputs &inputs) const {
+  struct CaptureWindow {
+    Capture mode = Capture::None;
+    Wrench mean{};
+    double first_time_s = 0.;
+    double last_time_s = 0.;
+    std::size_t samples = 0;
+  };
+
+  CaptureResult finish(CaptureResult result) {
+    capture_ = {};
+    return result;
+  }
+
+  UpdateResult invalid_update(const char *error) {
+    return {{},
+            error,
+            capture_active() ? finish(CaptureResult::InvalidSample)
+                             : CaptureResult::Pending};
+  }
+
+  CaptureResult collect(const WrenchSample &sample, double foot_pitch_rad) {
+    constexpr double capture_duration_s = 1.;
+    constexpr double max_read_gap_s = 0.1;
+    constexpr double flat_tolerance_rad = 0.01;
+    constexpr double gravity_m_s2 = 9.81;
+    constexpr double minimum_load_n = 1.;
+
+    if (capture_.mode == Capture::Mass && !has_empty_tare_)
+      return finish(CaptureResult::NeedsEmptyTare);
+    if (capture_needs_flat_plate() &&
+        (!std::isfinite(foot_pitch_rad) ||
+         std::abs(foot_pitch_rad) > flat_tolerance_rad))
+      return finish(CaptureResult::PlateNotFlat);
+
+    if (capture_.samples == 0) {
+      capture_.first_time_s = sample.sample_time_s;
+    } else {
+      const double advance_s = sample.sample_time_s - capture_.last_time_s;
+      if (advance_s < 0. || advance_s > max_read_gap_s)
+        return finish(CaptureResult::InvalidSample);
+      if (advance_s == 0.)
+        return CaptureResult::Pending;
+    }
+    capture_.last_time_s = sample.sample_time_s;
+    const double count = static_cast<double>(++capture_.samples);
+    for (std::size_t i = 0; i < sample.wrench.force.size(); ++i) {
+      capture_.mean.force[i] +=
+          (sample.wrench.force[i] - capture_.mean.force[i]) / count;
+      capture_.mean.torque[i] +=
+          (sample.wrench.torque[i] - capture_.mean.torque[i]) / count;
+    }
+    if (sample.sample_time_s - capture_.first_time_s + TimestampToleranceS <
+        capture_duration_s)
+      return CaptureResult::Pending;
+    if (!finite(capture_.mean))
+      return finish(CaptureResult::InvalidSample);
+
+    if (capture_.mode == Capture::Mass) {
+      // The sensor can report the plate reaction or the applied vertical load.
+      const double load_n =
+          std::abs(capture_.mean.force[2] - empty_tare_.force[2]);
+      if (!std::isfinite(load_n) || load_n < minimum_load_n)
+        return finish(CaptureResult::NoLoad);
+      subject_mass_kg_ = load_n / gravity_m_s2;
+    } else {
+      offset_ = capture_.mean;
+      if (capture_.mode == Capture::EmptyTare) {
+        empty_tare_ = offset_;
+        has_empty_tare_ = true;
+        subject_mass_kg_ = 0.;
+      }
+    }
+    return finish(CaptureResult::Success);
+  }
+
+  WrenchSample compute_wrench(const Inputs &inputs, double read_time_s) const {
     Wrench left = inputs.left.wrench;
     Wrench right = inputs.right.wrench;
-    // Transport delivery can differ between plates. Report the older source
-    // time so downstream age checks never make the combined wrench look newer.
-    const double sample_time_s =
-        std::min(inputs.left.sample_time_s, inputs.right.sample_time_s);
-
     if (configuration_.custom_transformation)
-      wrench_transform::custom_transformation(left, right, sample_time_s);
+      wrench_transform::custom_transformation(left, right, read_time_s);
 
     if (configuration_.matrix_transformation) {
       const auto &left_matrix = configuration_.same_transformation
@@ -229,18 +311,20 @@ private:
     }
 
     WrenchSample output;
-    // Matrices are user operations on physical components, not frame changes.
-    // Arms and output use physical axes attached to the foot platform, with
-    // their origin at the ankle midpoint; these arms therefore stay constant.
     wrench_transform::plate_to_ankle(output.wrench, left, right,
                                      configuration_.left.ankle_to_origin,
                                      configuration_.right.ankle_to_origin);
-    output.sample_time_s = sample_time_s;
+    output.sample_time_s = read_time_s;
     output.valid = true;
     return output;
   }
 
   Configuration configuration_;
+  CaptureWindow capture_;
+  Wrench empty_tare_{};
+  Wrench offset_{};
+  double subject_mass_kg_ = 0.;
+  bool has_empty_tare_ = false;
   bool configured_ = false;
   bool active_ = false;
 };

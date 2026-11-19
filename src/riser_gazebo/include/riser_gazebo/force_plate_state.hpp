@@ -14,13 +14,13 @@ namespace riser_gazebo {
 // values_. Exported handles retain stable addresses for the component lifetime.
 class ForcePlateState {
 public:
-  inline static constexpr std::array<const char *, 8> InterfaceNames{
-      "force.x",  "force.y",  "force.z",     "torque.x",
-      "torque.y", "torque.z", "sample_time", "valid"};
+  inline static constexpr std::array<const char *, 7> InterfaceNames{
+      "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z",
+      "valid"};
 
   ForcePlateState() {
     values_.fill(std::numeric_limits<double>::quiet_NaN());
-    values_[7] = 0.;
+    values_.back() = 0.;
   }
 
   void receive(const gz::msgs::Wrench &message) {
@@ -67,11 +67,10 @@ public:
     const double unavailable = std::numeric_limits<double>::quiet_NaN();
     for (std::size_t i = 0; i < 6; ++i)
       values_[i] = valid ? current_.wrench[i] : unavailable;
-    values_[6] = current_.time_ns >= 0 ? current_.time_ns * 1e-9 : unavailable;
-    values_[7] = valid ? 1. : 0.;
+    values_.back() = valid ? 1. : 0.;
   }
 
-  std::array<double, 8> &values() { return values_; }
+  std::array<double, InterfaceNames.size()> &values() { return values_; }
 
 private:
   struct Sample {
@@ -79,7 +78,7 @@ private:
     int64_t time_ns = -1;
     bool valid = false;
   };
-  std::array<double, 8> values_;
+  std::array<double, InterfaceNames.size()> values_;
   Sample pending_, current_;
   int64_t last_read_time_ns_ = -1;
   bool reset_pending_ = false;

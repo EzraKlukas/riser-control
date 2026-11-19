@@ -90,20 +90,22 @@ top, torso and hip and 0.22 m/s for bottom budget about 12 simulated seconds of
 nominal travel from neutral. Servo tracking and switch detection affect the
 actual duration. Wall-clock duration also depends on Gazebo's real-time factor.
 
-If Gazebo is already running in `actuator_position` mode, the commands below
-switch to calibration using the physical velocity limits selected at launch.
-Relaunch with `calibrate:=true` for the faster run.
+You can switch to calibration in a running Gazebo session. In the example below,
+the default angular position controller is active. The physical velocity limits
+are set at launch. Start with `calibrate:=true` for the fast homing limits.
 
 ```bash
 ros2 run controller_manager spawner calibration_controller --inactive \
   --param-file "$(ros2 pkg prefix riser_bringup)/share/riser_bringup/config/controllers.yaml"
 ros2 control switch_controllers --strict \
-  --deactivate riser_actuator_position_controller --activate calibration_controller
+  --deactivate riser_position_controller --activate calibration_controller
 ```
 
-Runtime hardware command-mode switching is not implemented; calibration requires
-starting with `actuator_position`. Interface names are resolved and checked at
-activation, so update logic does not depend on the order of loaned interfaces.
+After homing and settling, switch directly from calibration to another motion
+controller in the same Gazebo session. Use a single strict stop/start request.
+The [ankle tare and weighing procedure](src/riser_bringup/config/README.md#tare-and-weigh-before-an-experiment)
+shows the sequence for the angular-velocity pendulum controller. Interface
+names are resolved and checked at activation.
 The update loop uses fixed storage and the supplied simulation period; milestone
 and failure logging can block, so this is not a hard realtime hardware controller.
 See the [controller registration guide](src/riser_bringup/config/README.md#registering-a-controller)
@@ -121,8 +123,8 @@ forces.
 
 Controllers can also claim `left_force_plate/force.x` through
 `left_force_plate/torque.z`, and the corresponding `right_force_plate` state
-interfaces. Each sensor exposes `sample_time` (simulation seconds) and `valid`
-(1 for a finite sample no older than its configured `sample_timeout`, otherwise
+interfaces. Each sensor exposes `valid`
+(1 for a finite sample within its configured `sample_timeout`, otherwise
 0). Unavailable force/torque values are NaN. The state interfaces report force
 and torque at the surface centres in physical axes `(y_gz, x_gz, -z_gz)`.
 The wrench topics report in the Gazebo plate frames. See the [Gazebo interface reference](src/riser_gazebo/README.md#force-plate-state-interfaces).
@@ -137,8 +139,9 @@ Factory calibration is kept separately in that directory and is bypassed for
 simulated SI surface wrenches. Weight and inertia remain in the combined reading.
 
 The Gazebo control wrapper supplies exact physics time to the hardware adapter.
-`RiserSystem/read_time` exposes the read-cycle timestamp used by wrench validation;
-ROS clock-message delivery does not determine hardware integration intervals.
+`RiserSystem/read_time` supplies the single read-cycle timestamp on the combined
+ankle wrench. ROS clock-message delivery does not determine hardware integration
+intervals.
 
 Physics uses a 1 ms step, the controller is configured for 1000 Hz, and each
 force sensor defaults to 1000 Hz (`force_plate_rate:=...`). These are simulation

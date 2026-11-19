@@ -89,8 +89,9 @@ Its inertial feedback uses acceleration delayed by one physics step. See
 
 Gazebo bringup activates `ankle_wrench`, followed by
 `ankle_wrench_state_broadcaster`. Other backends do not yet provide force-plate
-states. The provider claims both plates' six wrench components, `sample_time`
-and `valid`, and exports the same eight names under `ankle_wrench/`.
+states. The provider claims both plates' six wrench components, their
+`valid` flags, the common read time and footplate pitch. It exports the eight wrench fields and
+`subject_mass_kg` under `ankle_wrench/`.
 The consumer publishes all eight values on
 `/ankle_wrench_state_broadcaster/dynamic_joint_states` for ROS tools and PlotJuggler.
 It uses local topics to keep these diagnostic values separate from `/joint_states`.
@@ -114,28 +115,62 @@ Processing order in `WrenchAggregationLogic::compute_wrench()`:
    `same_scaling=true` selects `ankle_wrench_gain` for both plates; false selects
    `left_wrench_gain` and `right_wrench_gain`.
 4. Sum forces and `plate torque + (ankle-to-plate arm × plate force)`.
+5. Subtract the latest tare from all six ankle wrench components.
 
 Thus a shared matrix with different gains uses `same_transformation=true` and
 `same_scaling=false`. Matrix entries are arbitrary experimental operations on
 physical components, **not a change of coordinate frame**; geometric moment arms
 remain in the physical axes. Defaults are identity matrices and unit gains.
-There is no plate-weight, gravity or inertial compensation.
+The tare removes a constant offset in platform axes. Gravity and inertial
+loads can still change as the platform moves.
 
-Both plate timestamps remain available at the inputs because transport delivery
-can differ even at equal sampling rates. The result carries the older timestamp,
-with at most `max_sample_skew_s` separation (default 0.01 s). Samples are used
-without interpolation. `max_sample_age_s` defaults to 0.1 s.
-Unavailable, stale, future-dated, excessively skewed or nonfinite data makes the
-output NaN with `valid=0`; fresh input recovers automatically. Activation
-requires bound input interfaces and valid configuration. The read-only provider
-starts with invalid output until good samples arrive. `read_time_interface`
-selects `RiserSystem/read_time`, so sample-quality and age checks use the exact
-hardware read-cycle time and elapsed time between successive reads. An empty
-parameter uses the supplied controller time and period;
-use that only when those timestamps accurately represent the hardware cycle. Consumers must
-check validity and age before using the wrench.
+The combined wrench carries one `sample_time`, the time the backend read both
+plates. `read_time_interface` selects `RiserSystem/read_time` in Gazebo. An
+empty setting uses the controller callback time. Gazebo reports a missing or
+stale plate through its `valid` flag. Missing or nonfinite inputs yield NaN
+and `valid=0` at the ankle until the inputs recover.
 Updates use fixed storage without allocation, blocking I/O or logging; this does
 not guarantee scheduling latency or hard realtime execution.
+
+### Tare and weigh before an experiment
+
+With the inverted pendulum inactive, keep the footplate flat and the plates
+empty for the first call. For the second call, have the participant stand still
+with their full weight supported by the plates. For the third call, have them
+hold the upright posture that should define zero for the experiment.
+
+```bash
+ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: true}'
+ros2 service call /ankle_wrench/measure_mass std_srvs/srv/Trigger '{}'
+ros2 param get /ankle_wrench subject_mass_kg
+ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: false}'
+```
+
+Each service replies after averaging one second of valid hardware reads.
+Keep the simulation running during capture. Empty tare and weighing
+require measured pitch within 0.01 rad of flat. Weighing divides the magnitude
+of the mean vertical force above the empty baseline by 9.81 m/s². It assumes
+the wrench transforms and gains preserve a calibrated vertical force.
+A standing tare uses the mean of the six pre-tare ankle components, so taring
+twice replaces the bias without accumulating it. The empty reference and
+participant mass survive the standing tare. An empty tare or reconfiguration
+clears the previous mass. Zero means no measurement is available.
+
+To use the measured mass after Gazebo homing, let the actuators reach home and
+settle, complete the procedure above, then load the experimental controller
+inactive and switch to it. The controller's angular velocity claims select the
+new mode automatically.
+
+```bash
+ros2 run controller_manager spawner inverted_pendulum --inactive
+ros2 control switch_controllers --strict \
+  --deactivate calibration_controller --activate inverted_pendulum
+```
+
+On activation it takes one snapshot of `ankle_wrench/subject_mass_kg` for the
+model and claims the same provider's tared torques. The pendulum parameter
+`mass` defaults to zero (use the provider) and accepts a positive manual
+override for testing. Leave the tare and mass unchanged while the pendulum is active.
 
 Stop/deactivate the broadcaster and any other consumers before deactivating,
 unloading or reconfiguring the provider. The manager also treats the general

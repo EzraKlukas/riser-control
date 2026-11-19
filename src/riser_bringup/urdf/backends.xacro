@@ -43,7 +43,6 @@
       <state_interface name="torque.x" />
       <state_interface name="torque.y" />
       <state_interface name="torque.z" />
-      <state_interface name="sample_time" />
       <state_interface name="valid" />
     </sensor>
   </xacro:macro>

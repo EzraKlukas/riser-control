@@ -38,9 +38,9 @@ struct UpdateResult {
 
 struct Parameters {
   double viscosity = 0.; // kg / (m s)
-  double mass = 0.;      // kg. No UI for this - measured quantity.
+  double mass = 0.;      // kg. Zero selects the provider's measured mass.
   double height = 1.80;
-  double is_male = true; // for gender-based constants.
+  bool is_male = true;   // for gender-based constants.
   // to add and implement later: inertia gain, footplate scaling, backboard
   // scaling, ml scaling, b scaling, gravity, halt-based params, ankle width,
   // stance width, soft upper and lower limits, load stiffness gain, delay_AP,
@@ -66,24 +66,29 @@ public:
     if (!std::isfinite(p.height) || !std::isfinite(p.viscosity) ||
         !std::isfinite(p.mass))
       return "Height, viscosity, mass must be finite.";
-    if (p.height <= 0 || p.mass <= 0)
-      return "Height and mass must be positive.";
+    if (p.height <= 0 || p.mass < 0)
+      return "Height must be positive and the mass override nonnegative.";
 
-    Configuration next;
-    next.viscosity = p.viscosity;
-    next.mass = p.mass;
-    next.com_height = (p.is_male ? 0.56 : 0.54) * p.height;
-    next.inertia = (p.is_male ? 0.35 : 0.33) * p.mass * (p.height * p.height);
-    configuration_ = next;
+    parameters_ = p;
     configured_ = true;
     return nullptr;
   }
 
-  const char *activate() {
+  const char *activate(double measured_mass_kg) {
     if (!configured_)
       return "Logic has not been configured";
-    // This read-only provider starts invalid. Sensor readiness and timestamp
-    // checks belong in update(), which receives the actual control-loop time.
+    const auto &p = parameters_;
+    const double mass = p.mass > 0. ? p.mass : measured_mass_kg;
+    if (!std::isfinite(mass) || mass <= 0.)
+      return "Measure participant mass with the ankle wrench controller before activating";
+    Configuration next;
+    next.viscosity = p.viscosity;
+    next.mass = mass;
+    next.com_height = (p.is_male ? 0.56 : 0.54) * p.height;
+    next.inertia = (p.is_male ? 0.35 : 0.33) * mass * (p.height * p.height);
+    if (!std::isfinite(next.inertia) || next.inertia <= 0.)
+      return "Calculated inertia must be positive and finite";
+    configuration_ = next;
     active_ = true;
     return nullptr;
   }
@@ -95,6 +100,15 @@ public:
   UpdateResult update(const Inputs &inputs, double time_s,
                       double period_s) const {
     UpdateResult result;
+    if (!active_ || !inputs.ankle_wrench.valid ||
+        !std::isfinite(inputs.ankle_wrench.T_x) ||
+        !std::isfinite(inputs.ankle_wrench.sample_time_s) ||
+        !std::isfinite(inputs.theta_bb.position) ||
+        !std::isfinite(inputs.theta_bb.velocity) ||
+        !std::isfinite(time_s) || !std::isfinite(period_s) || period_s < 0.) {
+      result.error = "Invalid state for the inverted pendulum";
+      return result;
+    }
     // convention: dot, ddot = first, second derivative.
     double theta_bb = inputs.theta_bb.position;
     double theta_dot_bb = inputs.theta_bb.velocity;
@@ -106,6 +120,10 @@ public:
                     c.inertia;
 
     theta_dot_bb += theta_ddot_bb * dt;
+    if (!std::isfinite(theta_dot_bb)) {
+      result.error = "Calculated backboard command is nonfinite";
+      return result;
+    }
     result.velocity_commands[THETA_BB] = theta_dot_bb;
     return result;
   }
@@ -113,6 +131,7 @@ public:
 private:
   bool active_ = false;
   bool configured_ = false;
+  Parameters parameters_;
   Configuration configuration_;
 };
 } // namespace riser_inverted_pendulum_controller::logic

@@ -12,11 +12,11 @@
 
 int main() {
   riser_gazebo::ForcePlateState left, right;
-  CHECK(left.values()[7] == 0.);
-  for (std::size_t i = 0; i < 7; ++i)
+  CHECK(left.values().back() == 0.);
+  for (std::size_t i = 0; i < 6; ++i)
     CHECK(std::isnan(left.values()[i]));
   left.read(1000000000, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
 
   gz::msgs::Wrench message;
   message.mutable_header()->mutable_stamp()->set_sec(1);
@@ -31,61 +31,58 @@ int main() {
   // A delayed ROS clock would reject a current measurement. The adapter must
   // supply the exact physics read-cycle time, not that delayed clock value.
   left.read(1001000000, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   CHECK(std::isnan(left.values()[2]));
   left.read(1002000000, .1);
-  CHECK(left.values()[7] == 1.);
+  CHECK(left.values().back() == 1.);
   left.read(1003000000, .1);
   const std::array<double, 6> expected{-2., 1., -300., 5., -4., 6.};
   for (std::size_t i = 0; i < expected.size(); ++i)
     CHECK(left.values()[i] == expected[i]);
-  CHECK(std::abs(left.values()[6] - 1.002) < 1e-12);
-  CHECK(left.values()[7] == 1.);
+  CHECK(left.values().back() == 1.);
   right.read(1003000000, .1);
-  CHECK(right.values()[7] == 0.); // Independent sensor storage.
+  CHECK(right.values().back() == 0.); // Independent sensor storage.
 
   left.read(1102000001, .1); // Stale samples cannot look like zero load.
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   CHECK(std::isnan(left.values()[2]));
-  CHECK(std::abs(left.values()[6] - 1.002) < 1e-12);
   left.read(0, .1); // Clock reset: discard future-dated state.
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   left.read(1003000000, .1); // Time catching up cannot revive the old sample.
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   left.read(0, .1);
   message.mutable_header()->mutable_stamp()->set_sec(0);
   message.mutable_header()->mutable_stamp()->set_nsec(0);
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 1.);
+  CHECK(left.values().back() == 1.);
 
   message.mutable_force()->set_z(std::numeric_limits<double>::infinity());
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   for (std::size_t i = 0; i < 6; ++i)
     CHECK(std::isnan(left.values()[i]));
   message.mutable_force()->set_z(0.);
   message.clear_torque();
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   message.mutable_torque()->set_z(0.);
   message.mutable_header()->mutable_stamp()->set_nsec(1000000000);
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 0.);
-  CHECK(std::isnan(left.values()[6]));
+  CHECK(left.values().back() == 0.);
   message.mutable_header()->mutable_stamp()->set_sec(
       std::numeric_limits<int64_t>::max());
   message.mutable_header()->mutable_stamp()->set_nsec(0);
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   message.clear_header();
   left.receive(message);
   left.read(0, .1);
-  CHECK(left.values()[7] == 0.);
+  CHECK(left.values().back() == 0.);
   std::cout << "Force-plate sample, isolation, freshness and invalid-data "
                "checks passed\n";
 }

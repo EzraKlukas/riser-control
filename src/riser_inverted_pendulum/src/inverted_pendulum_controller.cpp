@@ -16,12 +16,8 @@ InvertedPendulumController::state_interface_configuration() const {
       names.push_back(joint + "/" + interface);
     }
   }
-  // Currently only care for x and y components of torque.
-  names.push_back(wrench_source_name_ + "/" + WrenchInterfaceNames[TX]);
-  names.push_back(wrench_source_name_ + "/" + WrenchInterfaceNames[TY]);
-  names.push_back(wrench_source_name_ + "/" +
-                  WrenchInterfaceNames[SAMPLE_TIME]);
-  names.push_back(wrench_source_name_ + "/" + WrenchInterfaceNames[VALID]);
+  for (const auto *name : WrenchInterfaceNames)
+    names.push_back(wrench_source_name_ + "/" + name);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
 }
@@ -134,7 +130,10 @@ InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
     wrench_interface_.handles[component] = &*found;
   }
 
-  if (const auto *error = logic_.activate()) {
+  const double measured_mass_kg = wrench_interface_.handles[MASS]
+                                      ->get_optional(1)
+                                      .value_or(logic::Unavailable);
+  if (const auto *error = logic_.activate(measured_mass_kg)) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
     reset();
     return Callback::ERROR;
@@ -156,7 +155,7 @@ InvertedPendulumController::on_cleanup(const rclcpp_lifecycle::State &) {
 
 bool InvertedPendulumController::read_torque(
     logic::TorqueSample &sample) const {
-  std::array<double, WrenchInterfaceNames.size()> values{};
+  std::array<double, MASS> values{};
   for (std::size_t i = 0; i < values.size(); ++i) {
     if (!wrench_interface_.handles[i])
       return false;
@@ -207,7 +206,7 @@ bool InvertedPendulumController::read_inputs(logic::Inputs &inputs) const {
 bool InvertedPendulumController::send_commands(
     const std::array<double, kNumAngularJoints> &commands) {
   for (std::size_t joint = 0; joint < kNumAngularJoints; ++joint) {
-    if (!command_interfaces_[joint].set_value(commands[joint])) {
+    if (!joint_interfaces_[joint].command_handle->set_value(commands[joint])) {
       return false;
     }
   }
@@ -226,6 +225,7 @@ Result InvertedPendulumController::update(const rclcpp::Time &time,
   // translate from state interfaces to well-packed logical structs.
   logic::Inputs inputs;
   if (!read_inputs(inputs)) {
+    send_commands({});
     return Result::ERROR;
   }
   // call logic update function with latest state update.
@@ -235,6 +235,8 @@ Result InvertedPendulumController::update(const rclcpp::Time &time,
     RCLCPP_ERROR(get_node()->get_logger(), "Could not send velocity command.");
     return Result::ERROR;
   }
+  if (result.error)
+    return Result::ERROR;
   return Result::OK;
 }
 

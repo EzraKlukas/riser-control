@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <riser_kinematics/command_mode.hpp>
 #include <riser_kinematics/lateral.hpp>
 
 namespace riser_gazebo {
@@ -28,7 +29,10 @@ enum PhysicalJoint : std::size_t {
   HipJoint,
   PhysicalJointCount
 };
-constexpr std::size_t AngularCount = 3, ActuatorCount = 4;
+using kin::ActuatorCount;
+using kin::AngularCount;
+using kin::CommandMode;
+static_assert(PublicJointCount == kin::CommandJointNames.size());
 using PublicCoordinates = std::array<double, PublicJointCount>;
 constexpr std::array<std::size_t, 4> PublicForAxis{TopActuator, TorsoActuator,
                                                    HipActuator, BottomActuator};
@@ -36,21 +40,6 @@ constexpr std::array<std::size_t, 4> PhysicalForAxis{BackboardJoint, TorsoJoint,
                                                      HipJoint, FootPlateJoint};
 // All four-element mapping/reference arrays use kin::AxisIndex, NOT Gazebo
 // order.
-enum class CommandMode {
-  AngularPosition,
-  AngularVelocity,
-  ActuatorPosition,
-  ActuatorVelocity,
-  None
-};
-inline bool angular(CommandMode mode) noexcept {
-  return mode == CommandMode::AngularPosition ||
-         mode == CommandMode::AngularVelocity;
-}
-inline bool velocity(CommandMode mode) noexcept {
-  return mode == CommandMode::AngularVelocity ||
-         mode == CommandMode::ActuatorVelocity;
-}
 struct JointLimit {
   double lower, upper, velocity;
 };

@@ -6,6 +6,7 @@
 #include "riser_gazebo/reference_mapping.hpp"
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <gz/sim/components/JointForceCmd.hh>
 #include <gz/sim/components/JointPosition.hh>
@@ -26,19 +27,6 @@ constexpr std::size_t kPublicJointCount = PublicJointCount;
 constexpr std::size_t kAngularInterfaceCount = AngularCount;
 constexpr std::size_t kLinearInterfaceCount = ActuatorCount;
 
-// Startup selection only. Runtime claim switching is intentionally not handled.
-static CommandMode str_to_cmd_mode(const std::string &mode) {
-  if (mode == "position" || mode == "angular_position")
-    return CommandMode::AngularPosition;
-  if (mode == "velocity" || mode == "angular_velocity")
-    return CommandMode::AngularVelocity;
-  if (mode == "actuator_position")
-    return CommandMode::ActuatorPosition;
-  if (mode == "actuator_velocity")
-    return CommandMode::ActuatorVelocity;
-  return CommandMode::None;
-}
-
 using ReturnType = hardware_interface::return_type;
 
 // Loaded by gz_ros2_control through pluginlib, rather than directly by Gazebo.
@@ -57,9 +45,7 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   }
   // Public angles use radians, actuator strokes use metres from neutral.
   // Only ML couples two physical joints.
-  std::array<std::string, kPublicJointCount> public_joint_names_{
-      {"backboard_pitch", "foot_plate_pitch", "ml_angle", "top_actuator",
-       "torso_actuator", "hip_actuator", "bottom_actuator"}};
+  inline static constexpr auto &public_joint_names_ = kin::CommandJointNames;
   // Physical indices: 0/1 are revolute pitch joints; 2/3 are prismatic slides.
   std::array<std::string, 4> physical_joint_names_{
       {"backboard_pitch", "foot_plate_pitch", "torso_lateral", "hip_lateral"}};
@@ -158,7 +144,10 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
 
   bool state_ready_ = false, active_ = false;
   int64_t last_write_ns_ = -1;
-  CommandMode command_mode_ = CommandMode::None;
+  // prepare() can run on the service thread. perform() and write() run on
+  // the simulation thread, which also owns the references and commands.
+  std::atomic<CommandMode> command_mode_{CommandMode::None};
+  static_assert(std::atomic<CommandMode>::is_always_lock_free);
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
 
   const std::array<std::string, 2> force_plate_names_{"left_force_plate",
@@ -220,6 +209,45 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     references_seeded_ = true;
   }
 
+  void update_references(CommandMode mode, double step_seconds) {
+    PublicCoordinates commands{};
+    if (angular(mode)) {
+      const auto &source = velocity(mode) ? angular_velocity_command_
+                                          : angular_position_command_;
+      std::copy(source.begin(), source.end(), commands.begin());
+    } else {
+      const auto &source = velocity(mode) ? actuator_velocity_command_
+                                          : actuator_position_command_;
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
+        commands[PublicForAxis[axis]] = source[axis];
+    }
+    // Steps 0 / 0.5 / 1 live in ReferenceMapping::update:
+    // validate/integrate native commands once, convert with f^-1 and J, and
+    // recheck both coordinate systems. Failure leaves references unchanged.
+    auto next_position = reference_position_;
+    auto next_velocity = reference_velocity_;
+    auto next_physical = physical_reference_position_;
+    auto next_physical_velocity = physical_reference_velocity_;
+    if (reference_mapping_.update(mode, commands, step_seconds, next_position,
+                                  next_velocity, next_physical,
+                                  next_physical_velocity) != kin::Error::None)
+      throw std::domain_error("Invalid or out-of-bounds mapped reference");
+
+    for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+      const auto joint = PublicForAxis[axis];
+      const double advance = next_position[joint] - reference_position_[joint];
+      constexpr double tolerance = 1e-10; // metres; mapping roundoff only
+      if ((limit_switch_lower_[axis] && advance < -tolerance) ||
+          (limit_switch_upper_[axis] && advance > tolerance))
+        throw std::domain_error(std::string(public_joint_names_[joint]) +
+                                " reference advances into active limit switch");
+    }
+    reference_position_ = next_position;
+    reference_velocity_ = next_velocity;
+    physical_reference_position_ = next_physical;
+    physical_reference_velocity_ = next_physical_velocity;
+  }
+
 public:
   bool initSim(rclcpp::Node::SharedPtr &node, // is node the cm?
                std::map<std::string, sim::Entity> &gazebo_joints,
@@ -233,10 +261,6 @@ public:
     nh_ = node;
     ecm_ = &ecm;
     try {
-      command_mode_ =
-          str_to_cmd_mode(hardware_info.hardware_parameters.at("command_mode"));
-      if (command_mode_ == CommandMode::None)
-        throw std::runtime_error("Unsupported command mode");
       if (hardware_info.sensors.size() != force_plates_.size())
         throw std::runtime_error("Exactly two force-plate sensors required");
       for (std::size_t i = 0; i < force_plates_.size(); ++i) {
@@ -448,8 +472,7 @@ public:
     interfaces.emplace_back("RiserSystem", "read_time", &read_time_s_);
     return interfaces;
   }
-  // Both types are registered; write() consumes only the startup-selected
-  // family. Claim-based exclusivity/runtime mode switching remains future work.
+  // All families are available to claim. A switch selects the one write uses.
   std::vector<hardware_interface::CommandInterface>
   export_command_interfaces() override {
     std::vector<hardware_interface::CommandInterface> interfaces;
@@ -466,6 +489,28 @@ public:
                               "velocity", &actuator_velocity_command_[axis]);
     }
     return interfaces;
+  }
+  ReturnType prepare_command_mode_switch(
+      const std::vector<std::string> &start,
+      const std::vector<std::string> &stop) override {
+    return kin::plan_command_mode_switch(command_mode_.load(), start, stop)
+               ? ReturnType::OK
+               : ReturnType::ERROR;
+  }
+
+  ReturnType perform_command_mode_switch(
+      const std::vector<std::string> &start,
+      const std::vector<std::string> &stop) override {
+    const auto change = kin::plan_command_mode_switch(command_mode_.load(), start, stop);
+    if (!change)
+      return ReturnType::ERROR;
+    if (change->reseed) {
+      references_seeded_ = false;
+      if (state_ready_)
+        seed_references();
+      command_mode_.store(change->mode);
+    }
+    return ReturnType::OK;
   }
   hardware_interface::CallbackReturn
   on_activate(const rclcpp_lifecycle::State &) override {
@@ -585,46 +630,9 @@ public:
         return ReturnType::OK;
       if (!references_seeded_)
         seed_references();
-      PublicCoordinates commands{}; // one unified command collector.
-      if (angular(command_mode_)) {
-        const auto &source = velocity(command_mode_)
-                                 ? angular_velocity_command_
-                                 : angular_position_command_;
-        std::copy(source.begin(), source.end(), commands.begin());
-      } else {
-        const auto &source = velocity(command_mode_)
-                                 ? actuator_velocity_command_
-                                 : actuator_position_command_;
-        for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
-          commands[PublicForAxis[axis]] = source[axis];
-      }
-      // Steps 0 / 0.5 / 1 live in ReferenceMapping::update:
-      // validate/integrate native commands once, convert with f^-1 and J, and
-      // recheck both coordinate systems. Failure leaves references unchanged.
-      auto next_position = reference_position_;
-      auto next_velocity = reference_velocity_;
-      auto next_physical = physical_reference_position_;
-      auto next_physical_velocity = physical_reference_velocity_;
-      if (reference_mapping_.update(command_mode_, commands, step_seconds,
-                                    next_position, next_velocity, next_physical,
-                                    next_physical_velocity) != kin::Error::None)
-        throw std::domain_error("Invalid or out-of-bounds mapped reference");
-
-      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
-        const auto joint = PublicForAxis[axis];
-        const double advance =
-            next_position[joint] - reference_position_[joint];
-        constexpr double tolerance = 1e-10; // metres; mapping roundoff only
-        if ((limit_switch_lower_[axis] && advance < -tolerance) ||
-            (limit_switch_upper_[axis] && advance > tolerance))
-          throw std::domain_error(
-              public_joint_names_[joint] +
-              " reference advances into active limit switch");
-      }
-      reference_position_ = next_position;
-      reference_velocity_ = next_velocity;
-      physical_reference_position_ = next_physical;
-      physical_reference_velocity_ = next_physical_velocity;
+      const auto mode = command_mode_.load();
+      if (mode != CommandMode::None)
+        update_references(mode, step_seconds);
 
       // 2. Pitch servos consume independent angular targets. Actuator modes
       // supplied these through the nonlinear inverse; reduced physics is

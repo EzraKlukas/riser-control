@@ -1,19 +1,27 @@
 #include "riser_wrench_aggregation/wrench_aggregation_controller.hpp"
 #include <algorithm>
+#include <chrono>
 #include <pluginlib/class_list_macros.hpp>
 
 namespace riser_wrench_aggregation {
 using Callback = controller_interface::CallbackReturn;
 using Return = controller_interface::return_type;
 
+namespace {
+constexpr auto FootPitch = "foot_plate_pitch/position";
+constexpr auto SubjectMass = "subject_mass_kg";
+static_assert(std::atomic<double>::is_always_lock_free);
+} // namespace
+
 controller_interface::InterfaceConfiguration
 WrenchAggregationController::state_interface_configuration() const {
   std::vector<std::string> names;
   for (const auto &plate : plate_names_)
-    for (const auto *interface : WrenchInterfaceNames)
+    for (const auto *interface : PlateInterfaceNames)
       names.push_back(plate + "/" + interface);
   if (!read_time_interface_name_.empty())
     names.push_back(read_time_interface_name_);
+  names.push_back(FootPitch);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
 }
@@ -29,6 +37,8 @@ WrenchAggregationController::on_export_state_interfaces_list() {
   for (std::size_t i = 0; i < output_values_.size(); ++i)
     interfaces.push_back(std::make_shared<hardware_interface::StateInterface>(
         get_name(), WrenchInterfaceNames[i], &output_values_[i]));
+  interfaces.push_back(std::make_shared<hardware_interface::StateInterface>(
+      get_name(), SubjectMass, &subject_mass_state_));
   return interfaces;
 }
 
@@ -57,23 +67,128 @@ Callback WrenchAggregationController::on_init() {
     auto_declare("right_wrench_transformation",
                  defaults.right.linear_transform);
     auto_declare("read_time_interface", std::string{});
-    auto_declare("max_sample_age_s", defaults.max_sample_age_s);
-    auto_declare("max_sample_skew_s", defaults.max_sample_skew_s);
-    parameter_guard_ = get_node()->add_on_set_parameters_callback(
-        [this](const std::vector<rclcpp::Parameter> &) {
+    const auto node = get_node();
+    rcl_interfaces::msg::ParameterDescriptor mass_descriptor;
+    mass_descriptor.description =
+        "Measured participant mass in kg (0 until measured)";
+    node->declare_parameter(SubjectMass, 0., mass_descriptor, true);
+    parameter_guard_ = node->add_on_set_parameters_callback(
+        [this](const std::vector<rclcpp::Parameter> &parameters) {
           rcl_interfaces::msg::SetParametersResult result;
-          result.successful = !active_.load();
-          result.reason =
-              result.successful
-                  ? ""
-                  : "Deactivate and reconfigure before editing parameters";
+          result.successful = true;
+          for (const auto &parameter : parameters) {
+            if (parameter.get_name() == SubjectMass) {
+              if (parameter.get_type() ==
+                      rclcpp::ParameterType::PARAMETER_DOUBLE &&
+                  parameter.as_double() == measured_mass_kg_.load())
+                continue;
+              result.reason = "Use measure_mass to update the measured mass";
+            } else if (active_.load()) {
+              result.reason =
+                  "Deactivate and reconfigure before editing parameters";
+            } else {
+              continue;
+            }
+            result.successful = false;
+            break;
+          }
           return result;
         });
+    using Tare = std_srvs::srv::SetBool;
+    using Mass = std_srvs::srv::Trigger;
+    tare_service_ = node->create_service<Tare>(
+        "~/tare", [this](std::shared_ptr<rmw_request_id_t> header,
+                         std::shared_ptr<Tare::Request> request) {
+          request_capture(
+              request->data ? logic::Capture::EmptyTare
+                            : logic::Capture::StandingTare,
+              [this, header](bool success, const std::string &message) {
+                Tare::Response response;
+                response.success = success;
+                response.message = message;
+                tare_service_->send_response(*header, response);
+              });
+        });
+    mass_service_ = node->create_service<Mass>(
+        "~/measure_mass", [this](std::shared_ptr<rmw_request_id_t> header,
+                                 std::shared_ptr<Mass::Request>) {
+          request_capture(
+              logic::Capture::Mass,
+              [this, header](bool success, const std::string &message) {
+                Mass::Response response;
+                response.success = success;
+                response.message = message;
+                mass_service_->send_response(*header, response);
+              });
+        });
+    capture_timer_ = node->create_wall_timer(std::chrono::milliseconds(20),
+                                             [this] { respond_to_capture(); });
   } catch (const std::exception &error) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error.what());
     return Callback::ERROR;
   }
   return Callback::SUCCESS;
+}
+
+void WrenchAggregationController::request_capture(logic::Capture mode,
+                                                  CaptureReply reply) {
+  if (!active_.load()) {
+    reply(false, "Ankle wrench controller is inactive");
+  } else if (capture_reply_) {
+    reply(false, "A capture is already in progress");
+  } else {
+    capture_reply_ = std::move(reply);
+    capture_result_.store(logic::CaptureResult::Pending);
+    capture_request_.store(mode);
+  }
+}
+
+void WrenchAggregationController::respond_to_capture() {
+  using logic::CaptureResult;
+  auto result = capture_result_.load();
+  const double mass_kg = measured_mass_kg_.load();
+  if (parameter_mass_kg_ != mass_kg) {
+    if (!get_node()
+             ->set_parameter(rclcpp::Parameter(SubjectMass, mass_kg))
+             .successful)
+      return; // The measurement changed between the snapshot and parameter
+              // guard.
+    parameter_mass_kg_ = mass_kg;
+  }
+
+  if (!capture_reply_)
+    return;
+  if (result == CaptureResult::Pending) {
+    if (active_.load())
+      return;
+    capture_request_.store(logic::Capture::None);
+    result = CaptureResult::Cancelled;
+  }
+
+  const char *message = "Capture complete";
+  switch (result) {
+  case CaptureResult::Pending:
+  case CaptureResult::Success:
+    break;
+  case CaptureResult::InvalidSample:
+    message = "Capture lost valid force-plate samples";
+    break;
+  case CaptureResult::NeedsEmptyTare:
+    message = "Tare the empty plates before measuring mass";
+    break;
+  case CaptureResult::PlateNotFlat:
+    message = "Footplate must be flat throughout the capture";
+    break;
+  case CaptureResult::NoLoad:
+    message = "No measurable load above the empty-plate baseline";
+    break;
+  case CaptureResult::Cancelled:
+    message = "Controller deactivated during capture";
+    break;
+  }
+  auto reply = std::move(capture_reply_);
+  capture_reply_ = {};
+  reply(result == CaptureResult::Success, message);
 }
 
 Callback
@@ -105,16 +220,14 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
     parameters.matrix_transformation =
         node->get_parameter("matrix_transformation").as_bool();
     parameters.scaling = node->get_parameter("scaling").as_bool();
-    parameters.max_sample_age_s =
-        node->get_parameter("max_sample_age_s").as_double();
-    parameters.max_sample_skew_s =
-        node->get_parameter("max_sample_skew_s").as_double();
     if (const auto *error = logic_.configure(parameters)) {
       RCLCPP_ERROR(node->get_logger(), "%s", error);
       return Callback::ERROR;
     }
     read_time_interface_name_ =
         node->get_parameter("read_time_interface").as_string();
+    subject_mass_state_ = 0.;
+    measured_mass_kg_.store(subject_mass_state_);
     publish_sample({});
     return Callback::SUCCESS;
   } catch (const std::exception &error) {
@@ -126,12 +239,11 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
 Callback
 WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
   reset();
-  active_.store(true);
   for (std::size_t plate = 0; plate < plate_names_.size(); ++plate) {
-    for (std::size_t component = 0; component < WrenchInterfaceNames.size();
+    for (std::size_t component = 0; component < PlateInterfaceNames.size();
          ++component) {
       const auto name =
-          plate_names_[plate] + "/" + WrenchInterfaceNames[component];
+          plate_names_[plate] + "/" + PlateInterfaceNames[component];
       const auto found = std::find_if(
           state_interfaces_.begin(), state_interfaces_.end(),
           [&](const auto &interface) { return interface.get_name() == name; });
@@ -158,11 +270,22 @@ WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
     }
     read_time_interface_ = &*found;
   }
+  const auto foot_pitch = std::find_if(
+      state_interfaces_.begin(), state_interfaces_.end(),
+      [](const auto &interface) { return interface.get_name() == FootPitch; });
+  if (foot_pitch == state_interfaces_.end()) {
+    RCLCPP_ERROR(get_node()->get_logger(), "Missing state interface %s",
+                 FootPitch);
+    reset();
+    return Callback::ERROR;
+  }
+  foot_pitch_interface_ = &*foot_pitch;
   if (const auto *error = logic_.activate()) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
     reset();
     return Callback::ERROR;
   }
+  active_.store(true);
   return Callback::SUCCESS;
 }
 
@@ -179,8 +302,8 @@ WrenchAggregationController::on_cleanup(const rclcpp_lifecycle::State &) {
 }
 
 bool WrenchAggregationController::read_sample(const PlateInterfaces &interfaces,
-                                              logic::WrenchSample &sample) {
-  std::array<double, 8> values{};
+                                              logic::PlateSample &sample) {
+  std::array<double, PlateInterfaceNames.size()> values{};
   for (std::size_t i = 0; i < values.size(); ++i) {
     if (!interfaces.handles[i])
       return false;
@@ -189,12 +312,11 @@ bool WrenchAggregationController::read_sample(const PlateInterfaces &interfaces,
       return false;
     values[i] = *value;
   }
-  if (values[7] != 0. && values[7] != 1.)
+  if (values.back() != 0. && values.back() != 1.)
     return false;
   std::copy_n(values.begin(), 3, sample.wrench.force.begin());
   std::copy_n(values.begin() + 3, 3, sample.wrench.torque.begin());
-  sample.sample_time_s = values[6];
-  sample.valid = values[7] == 1.;
+  sample.valid = values.back() == 1.;
   return true;
 }
 
@@ -214,12 +336,15 @@ void WrenchAggregationController::publish_sample(
 }
 
 void WrenchAggregationController::reset() {
+  active_.store(false);
+  const auto queued = capture_request_.exchange(logic::Capture::None);
+  if (queued != logic::Capture::None || logic_.capture_active())
+    capture_result_.store(logic::CaptureResult::Cancelled);
   logic_.deactivate();
   plate_interfaces_ = {};
   read_time_interface_ = nullptr;
-  last_read_time_s_ = logic::Unavailable;
+  foot_pitch_interface_ = nullptr;
   publish_sample({});
-  active_.store(false);
 }
 
 Return WrenchAggregationController::update_reference_from_subscribers(
@@ -228,29 +353,31 @@ Return WrenchAggregationController::update_reference_from_subscribers(
 }
 
 Return WrenchAggregationController::update_and_write_commands(
-    const rclcpp::Time &time, const rclcpp::Duration &period) {
+    const rclcpp::Time &time, const rclcpp::Duration &) {
   logic::Inputs inputs;
-  if (!read_inputs(inputs)) {
-    publish_sample({});
-    return Return::OK;
+  if (!read_inputs(inputs))
+    inputs = {};
+  const double read_time_s =
+      read_time_interface_
+          ? read_time_interface_->get_optional(1).value_or(logic::Unavailable)
+          : time.seconds();
+  if (capture_request_.load() != logic::Capture::None) {
+    const auto request = capture_request_.exchange(logic::Capture::None);
+    if (request != logic::Capture::None)
+      logic_.begin_capture(request);
   }
-  double read_time_s = time.seconds();
-  double elapsed_s = period.seconds();
-  if (read_time_interface_) {
-    const auto value = read_time_interface_->get_optional(1);
-    if (!value) {
-      publish_sample({});
-      return Return::OK;
-    }
-    read_time_s = *value;
-    elapsed_s =
-        std::isfinite(last_read_time_s_) && read_time_s >= last_read_time_s_
-            ? read_time_s - last_read_time_s_
-            : 0.;
-    last_read_time_s_ = read_time_s;
-  }
-  const auto result = logic_.update(inputs, read_time_s, elapsed_s);
+  const double foot_pitch_rad =
+      logic_.capture_needs_flat_plate()
+          ? foot_pitch_interface_->get_optional(1).value_or(logic::Unavailable)
+          : logic::Unavailable;
+  const auto result =
+      logic_.update(inputs, read_time_s, foot_pitch_rad);
   publish_sample(result.output);
+  if (result.capture != logic::CaptureResult::Pending) {
+    subject_mass_state_ = logic_.subject_mass_kg();
+    measured_mass_kg_.store(subject_mass_state_);
+    capture_result_.store(result.capture);
+  }
   return Return::OK;
 }
 } // namespace riser_wrench_aggregation

@@ -81,7 +81,7 @@ def test_independent_sensing_paths_and_contact_geometry():
         assert sensor.find("command_interface") is None
         assert [s.get("name") for s in sensor.findall("state_interface")] == [
             "force.x", "force.y", "force.z", "torque.x", "torque.y", "torque.z",
-            "sample_time", "valid",
+            "valid",
         ]
         assert sensor.find("param[@name='gz_topic']").text == gz.find("sensor/topic").text
         assert float(sensor.find("param[@name='sample_timeout']").text) > 0
