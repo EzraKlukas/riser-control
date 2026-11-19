@@ -52,7 +52,7 @@ calibration_controller:
     # Fixed order: top, torso, hip, bottom. Bounds match model/kinematics.yaml.
     lower_limits: [-0.335, -0.335, -0.335, -0.08]
     upper_limits: [0.335, 0.335, 0.335, 0.24]
-    speeds: [0.3, 0.3, 0.3, 0.15]  # m/s position ramps
+    speeds: [0.45, 0.45, 0.45, 0.22]  # m/s position ramps
 
 ankle_wrench:
   ros__parameters:

@@ -37,6 +37,7 @@ def setup(context):
             "backend": backend,
             "controllers_file": controllers,
             "command_mode": mode,
+            "calibrate": str(calibrate).lower(),
             "control_coordinates_file": LaunchConfiguration("coordinates_file").perform(
                 context
             ),

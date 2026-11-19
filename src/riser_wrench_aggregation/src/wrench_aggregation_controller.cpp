@@ -113,7 +113,8 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
       RCLCPP_ERROR(node->get_logger(), "%s", error);
       return Callback::ERROR;
     }
-    read_time_interface_name_ = node->get_parameter("read_time_interface").as_string();
+    read_time_interface_name_ =
+        node->get_parameter("read_time_interface").as_string();
     publish_sample({});
     return Callback::SUCCESS;
   } catch (const std::exception &error) {
@@ -144,10 +145,11 @@ WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
     }
   }
   if (!read_time_interface_name_.empty()) {
-    const auto found = std::find_if(
-        state_interfaces_.begin(), state_interfaces_.end(), [&](const auto &interface) {
-          return interface.get_name() == read_time_interface_name_;
-        });
+    const auto found =
+        std::find_if(state_interfaces_.begin(), state_interfaces_.end(),
+                     [&](const auto &interface) {
+                       return interface.get_name() == read_time_interface_name_;
+                     });
     if (found == state_interfaces_.end()) {
       RCLCPP_ERROR(get_node()->get_logger(), "Missing read-time interface %s",
                    read_time_interface_name_.c_str());
@@ -241,9 +243,10 @@ Return WrenchAggregationController::update_and_write_commands(
       return Return::OK;
     }
     read_time_s = *value;
-    elapsed_s = std::isfinite(last_read_time_s_) && read_time_s >= last_read_time_s_
-                    ? read_time_s - last_read_time_s_
-                    : 0.;
+    elapsed_s =
+        std::isfinite(last_read_time_s_) && read_time_s >= last_read_time_s_
+            ? read_time_s - last_read_time_s_
+            : 0.;
     last_read_time_s_ = read_time_s;
   }
   const auto result = logic_.update(inputs, read_time_s, elapsed_s);

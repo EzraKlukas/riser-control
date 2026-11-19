@@ -1,0 +1,7 @@
+<library path="inverted_pendulum_controller">
+  <class name="riser_inverted_pendulum/InvertedPendulumController"
+         type="riser_inverted_pendulum::InvertedPendulumController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Models an inverted pendulum.</description>
+  </class>
+</library>

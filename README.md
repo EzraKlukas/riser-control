@@ -84,10 +84,15 @@ Keep those bounds consistent with `src/riser_bringup/urdf/model/kinematics.yaml`
 Targets are clamped to those bounds while waiting for switches; each phase has
 a 180-second simulation-time timeout. A missing switch stops the sequence and
 leaves the last position commands applied. Reactivating restarts calibration.
-The default sequence takes roughly nine simulated minutes.
+Launching with `calibrate:=true` caps each moving Gazebo joint's speed at its
+full physical travel per simulated second. The default ramps of 0.45 m/s for
+top, torso and hip and 0.22 m/s for bottom budget about 12 simulated seconds of
+nominal travel from neutral. Servo tracking and switch detection affect the
+actual duration. Wall-clock duration also depends on Gazebo's real-time factor.
 
-If Gazebo is already running in `actuator_position` mode, stop its normal
-controller before activating calibration:
+If Gazebo is already running in `actuator_position` mode, the commands below
+switch to calibration using the physical velocity limits selected at launch.
+Relaunch with `calibrate:=true` for the faster run.
 
 ```bash
 ros2 run controller_manager spawner calibration_controller --inactive \

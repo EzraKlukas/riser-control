@@ -9,12 +9,16 @@
   <xacro:arg name="geometry_file" default="$(find riser_bringup)/urdf/model/geometry.yaml" />
   <xacro:arg name="controllers_file" default="$(find riser_bringup)/config/controllers.yaml" />
   <xacro:arg name="command_mode" default="position" />
+  <xacro:arg name="calibrate" default="false" />
   <xacro:arg
       name="control_coordinates_file"
       default="$(find riser_bringup)/config/control_coordinates.json" />
   <xacro:arg name="force_plate_rate" default="1000" />
 
   <xacro:property name="k" value="${xacro.load_yaml('$(arg kinematics_file)')}" />
+  <xacro:property name="gazebo_calibration"
+      value="${'$(arg backend)' == 'gazebo' and '$(arg command_mode)' == 'actuator_position' and '$(arg calibrate)' == 'true'}" />
+  <xacro:property name="calibration_travel_time_s" value="1.0" />
   <xacro:property name="d" value="${xacro.load_yaml('$(arg dynamics_file)')}" />
   <xacro:property name="g" value="${xacro.load_yaml('$(arg geometry_file)')}" />
   <xacro:property
@@ -23,6 +27,13 @@
   <xacro:property name="c" value="${xacro.load_yaml('$(arg control_coordinates_file)')}" />
 
   <xacro:include filename="$(find riser_bringup)/urdf/backends.xacro" />
+
+  <xacro:macro name="physical_joint_limit" params="axis effort">
+    <xacro:property name="joint" value="${k['joints'][axis]}" />
+    <xacro:property name="travel" value="${joint['upper'] - joint['lower']}" />
+    <limit lower="${joint['lower']}" upper="${joint['upper']}" effort="${effort}"
+        velocity="${travel / calibration_travel_time_s if gazebo_calibration else joint['velocity']}" />
+  </xacro:macro>
 
   <!-- Robot links: base, backboard, setup hardware and carriages. -->
 
@@ -280,11 +291,7 @@
         xyz="${k['joints']['frame_pitch']['xyz_m'][0]} ${k['joints']['frame_pitch']['xyz_m'][1]} ${k['joints']['frame_pitch']['xyz_m'][2]}"
         rpy="${k['joints']['frame_pitch']['rpy_rad'][0]} ${k['joints']['frame_pitch']['rpy_rad'][1]} ${k['joints']['frame_pitch']['rpy_rad'][2]}" />
     <axis xyz="${k['joints']['frame_pitch']['axis'][0]} ${k['joints']['frame_pitch']['axis'][1]} ${k['joints']['frame_pitch']['axis'][2]}" />
-    <limit
-        lower="${k['joints']['frame_pitch']['lower']}"
-        upper="${k['joints']['frame_pitch']['upper']}"
-        effort="30617.30034"
-        velocity="${k['joints']['frame_pitch']['velocity']}" />
+    <xacro:physical_joint_limit axis="frame_pitch" effort="30617.30034" />
     <dynamics
         damping="${d['joints']['frame_pitch']['damping']}"
         friction="${d['joints']['frame_pitch']['friction']}" />
@@ -297,11 +304,7 @@
         xyz="${k['joints']['torso_lateral']['xyz_m'][0]} ${k['joints']['torso_lateral']['xyz_m'][1]} ${k['joints']['torso_lateral']['xyz_m'][2]}"
         rpy="${k['joints']['torso_lateral']['rpy_rad'][0]} ${k['joints']['torso_lateral']['rpy_rad'][1]} ${k['joints']['torso_lateral']['rpy_rad'][2]}" />
     <axis xyz="${k['joints']['torso_lateral']['axis'][0]} ${k['joints']['torso_lateral']['axis'][1]} ${k['joints']['torso_lateral']['axis'][2]}" />
-    <limit
-        lower="${k['joints']['torso_lateral']['lower']}"
-        upper="${k['joints']['torso_lateral']['upper']}"
-        effort="${k['joints']['torso_lateral']['effort']}"
-        velocity="${k['joints']['torso_lateral']['velocity']}" />
+    <xacro:physical_joint_limit axis="torso_lateral" effort="${k['joints']['torso_lateral']['effort']}" />
     <dynamics
         damping="${d['joints']['torso_lateral']['damping']}"
         friction="${d['joints']['torso_lateral']['friction']}" />
@@ -314,11 +317,7 @@
         xyz="${k['joints']['hip_lateral']['xyz_m'][0]} ${k['joints']['hip_lateral']['xyz_m'][1]} ${k['joints']['hip_lateral']['xyz_m'][2]}"
         rpy="${k['joints']['hip_lateral']['rpy_rad'][0]} ${k['joints']['hip_lateral']['rpy_rad'][1]} ${k['joints']['hip_lateral']['rpy_rad'][2]}" />
     <axis xyz="${k['joints']['hip_lateral']['axis'][0]} ${k['joints']['hip_lateral']['axis'][1]} ${k['joints']['hip_lateral']['axis'][2]}" />
-    <limit
-        lower="${k['joints']['hip_lateral']['lower']}"
-        upper="${k['joints']['hip_lateral']['upper']}"
-        effort="${k['joints']['hip_lateral']['effort']}"
-        velocity="${k['joints']['hip_lateral']['velocity']}" />
+    <xacro:physical_joint_limit axis="hip_lateral" effort="${k['joints']['hip_lateral']['effort']}" />
     <dynamics
         damping="${d['joints']['hip_lateral']['damping']}"
         friction="${d['joints']['hip_lateral']['friction']}" />
@@ -331,11 +330,7 @@
         xyz="${k['joints']['foot_pitch']['xyz_m'][0]} ${k['joints']['foot_pitch']['xyz_m'][1]} ${k['joints']['foot_pitch']['xyz_m'][2]}"
         rpy="${k['joints']['foot_pitch']['rpy_rad'][0]} ${k['joints']['foot_pitch']['rpy_rad'][1]} ${k['joints']['foot_pitch']['rpy_rad'][2]}" />
     <axis xyz="${k['joints']['foot_pitch']['axis'][0]} ${k['joints']['foot_pitch']['axis'][1]} ${k['joints']['foot_pitch']['axis'][2]}" />
-    <limit
-        lower="${k['joints']['foot_pitch']['lower']}"
-        upper="${k['joints']['foot_pitch']['upper']}"
-        effort="7399.680882"
-        velocity="${k['joints']['foot_pitch']['velocity']}" />
+    <xacro:physical_joint_limit axis="foot_pitch" effort="7399.680882" />
     <dynamics
         damping="${d['joints']['foot_pitch']['damping']}"
         friction="${d['joints']['foot_pitch']['friction']}" />

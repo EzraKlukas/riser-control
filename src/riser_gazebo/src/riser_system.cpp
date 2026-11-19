@@ -281,8 +281,9 @@ public:
           ecm.CreateComponent(physical_joints_[axis_index],
                               sim::components::JointVelocity());
       }
-      model_entity_ = ecm.Component<sim::components::ParentEntity>(
-                          physical_joints_[0])->Data();
+      model_entity_ =
+          ecm.Component<sim::components::ParentEntity>(physical_joints_[0])
+              ->Data();
       if (!ecm.Component<PhysicsClockComponent>(model_entity_))
         throw std::runtime_error(
             "AngularSystem requires riser_gazebo::PhysicsClockControlPlugin");

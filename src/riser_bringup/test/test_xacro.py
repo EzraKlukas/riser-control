@@ -102,6 +102,36 @@ def test_direct_pitch_model():
         assert direct.find(".//hardware/param[@name='pitch_drive']") is None
 
 
+@pytest.mark.parametrize(
+    "backend, mode",
+    [
+        ("gazebo", "actuator_position"),
+        ("gazebo", "actuator_velocity"),
+        ("gazebo", "position"),
+        ("mock", "position"),
+        ("ethercat", "position"),
+    ],
+)
+def test_calibration_physics_velocity_limits(backend, mode):
+    share = Path(get_package_share_directory("riser_bringup"))
+    model = str(share / "urdf/riser.urdf.xacro")
+    mappings = {"backend": backend, "command_mode": mode}
+    standard = E.fromstring(xacro.process_file(model, mappings=mappings).toxml())
+    calibration = E.fromstring(
+        xacro.process_file(model, mappings={**mappings, "calibrate": "true"}).toxml()
+    )
+    assert E.tostring(standard.find("ros2_control")) == E.tostring(
+        calibration.find("ros2_control")
+    )
+    fast = backend == "gazebo" and mode == "actuator_position"
+    for name in ("backboard_pitch", "torso_lateral", "hip_lateral", "foot_plate_pitch"):
+        path = f"joint[@name='{name}']/limit"
+        expected = standard.find(path).attrib.copy()
+        if fast:
+            expected["velocity"] = str(float(expected["upper"]) - float(expected["lower"]))
+        assert calibration.find(path).attrib == expected
+
+
 def test_neutral_frames_and_geometric_limits():
     share = Path(get_package_share_directory("riser_bringup"))
     k = json.loads((share / 'urdf/model/kinematics.yaml').read_text())
