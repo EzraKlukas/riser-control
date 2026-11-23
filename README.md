@@ -21,6 +21,9 @@ source install/setup.bash
 
 In each additional terminal, source ROS and `install/setup.bash`.
 
+For the optional single-motor EtherCAT backend, see the
+[riserms commissioning record](reports/riserms-ethercat-commissioning.md).
+
 ## Explore
 
 Start Gazebo with the position controller:

@@ -1,0 +1,1 @@
+SUBSYSTEM=="EtherCAT", KERNEL=="EtherCAT0", OWNER="root", GROUP="smplab", MODE="0660"

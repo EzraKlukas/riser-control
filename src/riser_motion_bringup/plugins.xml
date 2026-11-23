@@ -1,0 +1,1 @@
+<library path="motion_controller"><class name="riser_motion_bringup/MotionController" type="riser_motion_bringup::MotionController" base_class_type="controller_interface::ControllerInterface"><description>Finite bounded motor-shaft velocity profiles.</description></class></library>

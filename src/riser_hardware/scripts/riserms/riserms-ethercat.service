@@ -1,0 +1,15 @@
+[Unit]
+Description=Bind the riserms fieldbus I226-V to stock IgH EtherCAT
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/sys/kernel/realtime
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecCondition=/usr/local/sbin/riserms-ethercat-port check-kernel
+ExecStart=/usr/local/sbin/riserms-ethercat-port start
+ExecStop=/usr/local/sbin/riserms-ethercat-port stop
+
+[Install]
+WantedBy=multi-user.target

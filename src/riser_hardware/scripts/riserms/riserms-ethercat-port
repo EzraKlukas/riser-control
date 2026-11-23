@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly pci=/sys/bus/pci
+readonly fieldbus=0000:57:00.0 management=0000:59:00.0
+readonly fieldbus_mac=38:05:25:37:9f:32 management_mac=38:05:25:37:9f:33
+readonly ethercat=/opt/etherlab/bin/ethercat
+
+fail() {
+  printf 'riserms EtherCAT: %s\n' "$*" >&2
+  exit 1
+}
+
+pci_driver() {
+  local path="$pci/devices/$1/driver"
+  if [[ -L $path ]]; then
+    basename "$(readlink -f "$path")"
+  fi
+}
+
+check_kernel() {
+  local kernel module path version signer
+  kernel=$(uname -r)
+  [[ $kernel == 6.8.*-realtime && $(cat /sys/kernel/realtime 2>/dev/null) == 1 ]] ||
+    fail "boot a qualified Ubuntu GA realtime kernel"
+  for module in ec_master ec_igc; do
+    path=$(modinfo -n "$module") || fail "$module is unavailable for $kernel"
+    version=$(modinfo -F vermagic "$module") || fail "cannot read $module vermagic"
+    signer=$(modinfo -F signer "$module") || fail "cannot read $module signing metadata"
+    [[ $(readlink -f "$path") == "$(readlink -f "/lib/modules/$kernel/updates/riser-igh-stock/$module.ko")" &&
+       ${version%% *} == "$kernel" && -n $signer ]] ||
+      fail "$module must be the signed stock build for $kernel"
+  done
+}
+
+check_management() {
+  [[ $(pci_driver "$management") == igc &&
+     -e "$pci/devices/$management/net/enp89s0" &&
+     $(ethtool -P enp89s0) == "Permanent address: $management_mac" ]] ||
+    fail "management I226-LM is not on Linux igc"
+}
+
+restore_fieldbus() {
+  local driver
+  driver=$(pci_driver "$fieldbus") || return
+  if [[ $driver == ec_igc ]]; then
+    printf '%s\n' "$fieldbus" > "$pci/drivers/ec_igc/unbind" || return
+    driver=
+  fi
+  [[ -z $driver || $driver == igc ]] || return 1
+  printf '\n' > "$pci/devices/$fieldbus/driver_override" || return
+  if [[ -z $driver ]]; then
+    printf '%s\n' "$fieldbus" > "$pci/drivers/igc/bind" || return
+  fi
+  [[ $(pci_driver "$fieldbus") == igc ]] || return 1
+  if [[ -d /sys/module/ec_igc ]]; then modprobe -r ec_igc || return; fi
+  if [[ -d /sys/module/ec_master ]]; then modprobe -r ec_master || return; fi
+}
+
+undo_failed_start() {
+  local result=$?
+  trap - EXIT
+  if (( result != 0 )); then
+    restore_fieldbus || printf 'riserms EtherCAT: automatic fieldbus rollback failed\n' >&2
+  fi
+  exit "$result"
+}
+
+case ${1:-} in
+  check-kernel)
+    check_kernel
+    ;;
+  start)
+    [[ $EUID == 0 && $(hostname -s) == riserms ]] || fail "run as root on riserms"
+    check_kernel
+    check_management
+    [[ $(pci_driver "$fieldbus") == igc &&
+       -e "$pci/devices/$fieldbus/net/enp87s0" &&
+       $(ethtool -P enp87s0) == "Permanent address: $fieldbus_mac" ]] ||
+      fail "fieldbus I226-V is not on Linux igc"
+    addresses=$(ip -o addr show dev enp87s0)
+    routes4=$(ip route show table all dev enp87s0)
+    routes6=$(ip -6 route show table all dev enp87s0)
+    [[ -z $addresses && -z $routes4 && -z $routes6 ]] ||
+      fail "fieldbus interface has host addresses or routes"
+    [[ ! -d /sys/module/ec_master && ! -d /sys/module/ec_igc ]] ||
+      fail "unload the inactive EtherCAT modules before starting"
+    # Both I226 devices stay claimed by Linux until the native driver registers.
+    trap undo_failed_start EXIT
+    modprobe ec_master "main_devices=$fieldbus_mac"
+    modprobe ec_igc
+    ip link set dev enp87s0 down
+    printf '%s\n' ec_igc > "$pci/devices/$fieldbus/driver_override"
+    printf '%s\n' "$fieldbus" > "$pci/drivers/igc/unbind"
+    printf '%s\n' "$fieldbus" > "$pci/drivers/ec_igc/bind"
+    [[ $(pci_driver "$fieldbus") == ec_igc ]] || fail "native driver did not attach"
+    check_management
+    udevadm settle --timeout=15
+    master=$("$ethercat" master -m 0)
+    grep -Fxq "    Main: $fieldbus_mac (attached)" <<<"$master" ||
+      fail "master 0 has not attached the fieldbus port"
+    trap - EXIT
+    printf '%s\n' "$master"
+    ;;
+  stop)
+    [[ $EUID == 0 && $(hostname -s) == riserms ]] || fail "run as root on riserms"
+    check_management
+    if [[ $(pci_driver "$fieldbus") == ec_igc ]]; then
+      master=$("$ethercat" master -m 0)
+      grep -Fxq '  Active: no' <<<"$master" || fail "stop and release the EtherCAT application first"
+    fi
+    restore_fieldbus || fail "fieldbus rollback failed"
+    check_management
+    ;;
+  *)
+    fail "usage: $0 {check-kernel|start|stop}"
+    ;;
+esac

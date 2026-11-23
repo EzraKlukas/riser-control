@@ -12,8 +12,9 @@ class EthercatBoundary final : public hardware_interface::SystemInterface {
 
 public:
   hardware_interface::CallbackReturn
-  on_init(const hardware_interface::HardwareInfo &info) override {
-    if (SystemInterface::on_init(info) !=
+  on_init(const hardware_interface::HardwareComponentInterfaceParams &params)
+      override {
+    if (SystemInterface::on_init(params) !=
         hardware_interface::CallbackReturn::SUCCESS)
       return hardware_interface::CallbackReturn::ERROR;
     if (info_.joints.size() != 3)
