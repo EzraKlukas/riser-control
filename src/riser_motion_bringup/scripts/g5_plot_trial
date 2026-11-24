@@ -1,0 +1,49 @@
+#!/usr/bin/env python3
+"""Select bag topics offline, then open an independent PlotJuggler window."""
+
+import argparse
+import os
+import subprocess
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+import yaml
+
+
+def select_topics(path, topics, directory):
+    from rosbag2_py import Info, StorageOptions, bag_rewrite
+
+    available = {
+        t.topic_metadata.name
+        for t in Info().read_metadata(str(path), "").topics_with_message_count
+    }
+    if not topics or set(topics) - available:
+        raise ValueError("Select recorded topics from " + ", ".join(sorted(available)))
+    destination = directory / "selected"
+    options = directory / "filter.yaml"
+    options.write_text(
+        yaml.safe_dump(
+            {
+                "output_bags": [
+                    {"uri": str(destination), "storage_id": "mcap", "topics": topics}
+                ]
+            }
+        )
+    )
+    bag_rewrite([StorageOptions(uri=str(path))], str(options))
+    return next(destination.glob("*.mcap"))
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("bag", type=Path)
+    parser.add_argument("topics", nargs="+")
+    args = parser.parse_args()
+    os.environ["ROS_DOMAIN_ID"] = str((int(os.getenv("ROS_DOMAIN_ID", "0")) + 1) % 101)
+    os.environ["ROS_AUTOMATIC_DISCOVERY_RANGE"] = "LOCALHOST"
+    os.environ.pop("ROS_STATIC_PEERS", None)
+    with TemporaryDirectory() as temporary:
+        bag = select_topics(args.bag, args.topics, Path(temporary))
+        subprocess.run(
+            ["ros2", "run", "plotjuggler", "plotjuggler", "-d", str(bag)], check=True
+        )

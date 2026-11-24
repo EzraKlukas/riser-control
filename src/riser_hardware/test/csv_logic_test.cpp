@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <initializer_list>
 #include <riser_hardware/csv_logic.hpp>
+#include <riser_hardware/g5_topology.hpp>
 int main() {
   using namespace riser_hardware;
   if (enable_word(0x40) != 6 || enable_word(0x21) != 7 ||
@@ -9,6 +10,28 @@ int main() {
       safe_velocity(2, 1, 1) || safe_velocity(1, 1, 1e12) ||
       !safe_velocity(-0.5, 1, 100))
     return EXIT_FAILURE;
+  std::vector<G5Identity> ring(4, {0x83, 4, 0x20001, 0, 0});
+  std::vector<AxisAddress> addresses;
+  for (unsigned i = 0; i < 4; ++i) {
+    ring[i].serial = 10 + i;
+    addresses.push_back({std::to_string(i), i, 0, 10 + i, i == 0});
+  }
+  validate_topology(addresses, ring);
+  validate_topology(addresses, {ring.front()});
+  for (auto &a : addresses)
+    a.enabled = true;
+  validate_topology(addresses, ring);
+  std::swap(ring[1], ring[2]);
+  try {
+    validate_topology(addresses, ring);
+    return 24;
+  } catch (const std::runtime_error &) {
+  }
+  try {
+    validate_topology(addresses, {ring.front()});
+    return 25;
+  } catch (const std::runtime_error &) {
+  }
   CsvGuard guard;
   Feedback f{false, 0, 0, 0x40, 9};
   if (guard.observe(f, 1, .001, 1, 1) != 0 || guard.fault())

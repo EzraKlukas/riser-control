@@ -11,3 +11,7 @@ __pycache__/
 # clangd
 .clangd
 .cache/*
+
+nvim*
+
+/data/

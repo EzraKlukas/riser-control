@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+"""Host-side recorder control and offline stamped telemetry export."""
+
+import argparse
+import fcntl
+import re
+import signal
+import socket
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+
+ROOT = Path.home() / "riser-control/data"
+CONTROL = ROOT / ".g5-recorder.sock"
+
+
+def trial(name):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+        raise ValueError("Invalid trial name")
+    return ROOT / name
+
+
+def verify(path, expected=()):
+    subprocess.run(["ros2", "bag", "info", str(path)], check=True)
+    from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+
+    reader = SequentialReader()
+    reader.open(StorageOptions(uri=str(path)), ConverterOptions("", ""))
+    stats = {}
+    while reader.has_next():
+        topic, _, stamp = reader.read_next()
+        first, last, count, gap = stats.get(topic, (stamp, stamp, 0, 0))
+        stats[topic] = first, stamp, count + 1, max(gap, stamp - last)
+    missing = set(expected) - stats.keys()
+    if missing:
+        raise ValueError("Missing recorded topics: " + ", ".join(sorted(missing)))
+    if not stats:
+        raise ValueError("Bag is empty")
+    for topic, (first, last, count, gap) in stats.items():
+        hz = (count - 1) * 1e9 / (last - first) if last > first else 0
+        print(
+            f"{topic} {count} messages, {hz:.1f} Hz across trial, largest reception gap {gap / 1e6:.1f} ms"
+        )
+
+
+def record(name, topics):
+    path = trial(name)
+    with (
+        (ROOT / ".recorder.lock").open("a") as lock,
+        socket.socket(socket.AF_UNIX) as listener,
+    ):
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        CONTROL.unlink(missing_ok=True)
+        listener.bind(str(CONTROL))
+        listener.listen(1)
+        listener.settimeout(0.5)
+        process = subprocess.Popen(
+            [
+                "ros2",
+                "bag",
+                "record",
+                "--disable-keyboard-controls",
+                "-o",
+                str(path),
+                "--topics",
+                *topics,
+            ]
+        )
+        try:
+            while process.poll() is None:
+                try:
+                    client, _ = listener.accept()
+                except TimeoutError:
+                    continue
+                with client:
+                    process.send_signal(signal.SIGINT)
+                    if process.wait(timeout=30):
+                        raise RuntimeError("Recorder failed at shutdown")
+                    verify(path, topics)
+                    sys.stdout.flush()
+                    client.sendall((name + " finalized\n").encode())
+                break
+            if process.returncode:
+                raise RuntimeError(f"Recorder exited {process.returncode}")
+        finally:
+            if process.poll() is None:
+                process.send_signal(signal.SIGINT)
+                process.wait()
+            CONTROL.unlink(missing_ok=True)
+
+
+def export(path, topics):
+    from collections import defaultdict
+
+    import numpy as np
+    from control_msgs.msg import DynamicJointState
+    from rclpy.serialization import deserialize_message
+    from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
+
+    reader = SequentialReader()
+    reader.open(StorageOptions(uri=str(path)), ConverterOptions("", ""))
+    available = {
+        t.name
+        for t in reader.get_all_topics_and_types()
+        if t.type == "control_msgs/msg/DynamicJointState"
+    }
+    selected = set(topics) or available
+    if not selected or selected - available:
+        raise ValueError("Select recorded DynamicJointState topics for NPZ export")
+    samples = defaultdict(list)
+    for_unit = {
+        "position": "rad",
+        "velocity": "rad_s",
+        "torque_nm": "Nm",
+        "torque_raw": "permille",
+    }
+    while reader.has_next():
+        topic, data, _ = reader.read_next()
+        if topic not in selected:
+            continue
+        msg = deserialize_message(data, DynamicJointState)
+        stamp = msg.header.stamp.sec * 10**9 + msg.header.stamp.nanosec
+        for name, state in zip(msg.joint_names, msg.interface_values):
+            for key, value in zip(state.interface_names, state.values):
+                prefix = f"{topic.strip('/')}/{name}/{key}"
+                samples[prefix + "/stamp_ns"].append(stamp)
+                samples[
+                    prefix
+                    + "/"
+                    + for_unit.get(key, "rad" if key.endswith("_rad") else "unitless")
+                ].append(value)
+    if not samples:
+        raise ValueError("No telemetry samples")
+    np.savez_compressed(path.with_suffix(".npz"), **samples)
+    print(path.with_suffix(".npz"))
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "action",
+        choices=[
+            "start",
+            "worker",
+            "pause",
+            "resume",
+            "stop",
+            "list",
+            "verify",
+            "export",
+        ],
+    )
+    parser.add_argument("name", nargs="?", default="")
+    parser.add_argument("topics", nargs="*")
+    a = parser.parse_args()
+    ROOT.mkdir(parents=True, exist_ok=True)
+    if a.action == "start":
+        name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + (
+            "_" + a.name if a.name else ""
+        )
+        path = trial(name)
+        if not a.topics or any(not t.startswith("/") for t in a.topics):
+            raise ValueError("Select absolute ROS topic names")
+        logfile = path.with_suffix(".log")
+        with logfile.open("x") as log:
+            worker = subprocess.Popen(
+                [sys.executable, __file__, "worker", name, *a.topics],
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=log,
+                start_new_session=True,
+            )
+        for _ in range(100):
+            if worker.poll() is not None:
+                raise RuntimeError(logfile.read_text())
+            if path.is_dir() and CONTROL.exists():
+                print(name)
+                return
+            time.sleep(0.1)
+        raise RuntimeError(f"Recorder startup unconfirmed, inspect {logfile}")
+    elif a.action == "worker":
+        record(a.name, a.topics)
+    elif a.action in ("pause", "resume"):
+        subprocess.run(
+            [
+                "ros2",
+                "service",
+                "call",
+                "/rosbag2_recorder/" + a.action,
+                "rosbag2_interfaces/srv/" + a.action.title(),
+                "{}",
+            ],
+            timeout=10,
+            check=True,
+        )
+    elif a.action == "stop":
+        with socket.socket(socket.AF_UNIX) as client:
+            client.settimeout(120)
+            client.connect(str(CONTROL))
+            result = client.recv(4096).decode()
+            if not result:
+                raise RuntimeError("Finalization failed; inspect trial log")
+            print(result.strip())
+            print(trial(result.split()[0]).with_suffix(".log").read_text()[-6000:])
+    elif a.action == "list":
+        print("\n".join(p.parent.name for p in sorted(ROOT.glob("*/metadata.yaml"))))
+    elif a.action == "verify":
+        verify(trial(a.name))
+    else:
+        export(trial(a.name), a.topics)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        sys.exit(str(exc))

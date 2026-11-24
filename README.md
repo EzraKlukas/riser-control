@@ -21,8 +21,8 @@ source install/setup.bash
 
 In each additional terminal, source ROS and `install/setup.bash`.
 
-For the optional single-motor EtherCAT backend, see the
-[riserms commissioning record](reports/riserms-ethercat-commissioning.md).
+For the stock IgH G5 backend and laptop console, see the
+[G5 commissioning checklist](reports/g5-motion-bringup.md).
 
 ## Explore
 
@@ -212,8 +212,7 @@ and scheduling. Reduced pitch inertia uses acceleration delayed by one physics
 step. Servo gains and travel bounds are provisional simulation parameters.
 See [CAD model derivation](reports/model.md) for the geometry and dynamics.
 
-Subject dynamics and a balance controller are not yet implemented. The EtherCAT
-backend is an unimplemented hardware boundary and refuses configuration.
+The inverted-pendulum controller implements the backboard law. The real hardware launch uses the motion-inhibited G5 CSV profile by default.
 
 ## Development
 
@@ -221,7 +220,7 @@ backend is an unimplemented hardware boundary and refuses configuration.
 | --- | --- |
 | `src/riser_bringup/` | Launch files, controllers, URDF/Xacro, model parameters, worlds and state adapters. |
 | `src/riser_gazebo/` | Physical actuation and reduced pitch dynamics. |
-| `src/riser_hardware/` | Hardware boundary and standalone actuator-mapping helpers. |
+| `src/riser_hardware/` | IgH G5 CSV backend and actuator-mapping helpers. |
 | `src/riser_subject_simulation/` | Subject wrench world plugin, ROS bridge input and optional GUI. |
 | `src/riser_human_balance/` | Spawnable participant, sagittal ankle balance and pitch coupling. |
 | `evidence/` | Small offline linkage and actuator-mapping references. |

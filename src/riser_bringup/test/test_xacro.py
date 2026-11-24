@@ -15,7 +15,6 @@ def test_angular_interfaces_and_shared_geometry():
         "none": None,
         "mock": "mock_components/GenericSystem",
         "gazebo": "riser_gazebo/AngularSystem",
-        "ethercat": "riser_hardware/EthercatBoundary",
     }
     for backend, plugin in plugins.items():
         for mode in ["position", "velocity"]:
@@ -111,7 +110,6 @@ def test_direct_pitch_model():
         ("gazebo", "actuator_velocity"),
         ("gazebo", "position"),
         ("mock", "position"),
-        ("ethercat", "position"),
     ],
 )
 def test_backend_velocity_limits(backend, mode):
@@ -167,7 +165,7 @@ def test_neutral_frames_and_geometric_limits():
     assert float(ml_control.find("param[@name='velocity_limit']").text) == float(ml.get('velocity'))
 
 
-@pytest.mark.parametrize("backend", ["mock", "gazebo", "ethercat"])
+@pytest.mark.parametrize("backend", ["mock", "gazebo"])
 @pytest.mark.parametrize("mode", ["effort", "acceleration"])
 def test_unsupported_command_is_rejected(backend, mode):
     share = Path(get_package_share_directory("riser_bringup"))

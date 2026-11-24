@@ -1,4 +1,4 @@
-"""Simulation and mock angular control interfaces."""
+"""RISER mock, Gazebo and G5 hardware control entry points."""
 
 import os
 from pathlib import Path
@@ -18,6 +18,21 @@ import xacro
 
 def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
+    if backend == "ethercat":
+        launch = (
+            Path(get_package_share_directory("riser_motion_bringup"))
+            / "launch/bottom_motor.launch.py"
+        )
+        return [
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(str(launch)),
+                launch_arguments={
+                    "drive_backend": "real",
+                    "controllers_file": LaunchConfiguration("g5_controllers_file"),
+                }.items(),
+            ),
+            Node(package="riser_bringup", executable="g5_calibration.py", output="screen"),
+        ]
     mode = LaunchConfiguration("command_mode").perform(context)
     calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
     human = LaunchConfiguration("human").perform(context) == "true"
@@ -109,10 +124,6 @@ def setup(context):
         ]
     else:
         params = {}
-        if backend == "ethercat":
-            params["hardware_components_initial_state"] = {
-                "unconfigured": ["RiserSystem"]
-            }
         actions.append(
             Node(
                 package="controller_manager",
@@ -150,9 +161,6 @@ def setup(context):
         "--param-file",
         controllers,
     ]
-    # Hardware starts inactive until the boundary can be configured explicitly.
-    if backend == "ethercat":
-        args.append("--inactive")
     actions.append(
         Node(
             package="controller_manager",
@@ -178,6 +186,13 @@ def setup(context):
 def generate_launch_description():
     return LaunchDescription(
         [
+            DeclareLaunchArgument(
+                "g5_controllers_file",
+                default_value=str(
+                    Path(get_package_share_directory("riser_motion_bringup"))
+                    / "config/controllers.yaml"
+                ),
+            ),
             DeclareLaunchArgument(
                 "controllers_file",
                 default_value=str(

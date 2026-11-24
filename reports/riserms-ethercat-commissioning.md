@@ -1,5 +1,8 @@
 # riserms bottom-axis EtherCAT commissioning
 
+For current drive settings, motion-inhibited first contact, and the powered-test prerequisites, use the [G5 motion bringup checklist](g5-motion-bringup.md).
+
+
 Current host maintenance and first contact are documented in
 [riserms realtime and EtherCAT setup](riserms-realtime-setup.md).
 This report records the earlier integration and generic-kernel baseline.

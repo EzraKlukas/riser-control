@@ -9,17 +9,16 @@
 
 namespace riser_inverted_pendulum_controller {
 
-inline constexpr std::size_t kNumWrenchInterfaces = 5;
+inline constexpr std::size_t kNumWrenchInterfaces = 4;
 inline constexpr const char *kCommandInterface = "velocity";
 inline constexpr std::array<const char *, kNumWrenchInterfaces>
 
-    WrenchInterfaceNames{"torque.x", "torque.y", "sample_time", "valid",
-                         "subject_mass_kg"};
-inline constexpr std::array<const char *, 3> JointInterfaceNames{
-    "position", "velocity", "effort"}; // expose time too?
+    WrenchInterfaceNames{"torque.x", "sample_time", "valid", "subject_mass_kg"};
+inline constexpr std::array<const char *, 2> JointInterfaceNames{"position",
+                                                                 "velocity"};
 
-enum WrenchInterfaceIndices { TX, TY, SAMPLE_TIME, VALID, MASS };
-enum JointInterfaceIndices { POSITION, VELOCITY, EFFORT };
+enum WrenchInterfaceIndices { TX, SAMPLE_TIME, VALID, MASS };
+enum JointInterfaceIndices { POSITION, VELOCITY };
 
 class InvertedPendulumController
     : public controller_interface::ControllerInterface {
@@ -42,7 +41,9 @@ public:
 
 private:
   struct JointInterfaces {
-    std::array<hardware_interface::LoanedStateInterface *, 3> state_handles{};
+    std::array<hardware_interface::LoanedStateInterface *,
+               JointInterfaceNames.size()>
+        state_handles{};
     hardware_interface::LoanedCommandInterface *command_handle = nullptr;
   };
   struct WrenchInterfaces {
@@ -50,15 +51,13 @@ private:
         handles{};
   };
 
-  bool read_joints(std::array<logic::JointSample, kNumAngularJoints> &) const;
   bool read_torque(logic::TorqueSample &) const;
   bool read_inputs(logic::Inputs &) const;
   bool send_commands(const std::array<double, kNumAngularJoints> &);
 
-  const std::array<std::string, kNumAngularJoints> joint_names_ = {
-      "backboard_pitch", "ml_angle", "foot_plate_pitch"};
+  const std::string joint_name_ = "backboard_pitch";
   std::string wrench_source_name_ = "ankle_wrench";
-  std::array<JointInterfaces, kNumAngularJoints> joint_interfaces_;
+  JointInterfaces backboard_;
   WrenchInterfaces wrench_interface_;
 
   void reset();

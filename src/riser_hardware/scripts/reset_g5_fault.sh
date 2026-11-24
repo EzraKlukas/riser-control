@@ -4,8 +4,10 @@ set -euo pipefail
 ethercat=${ETHERCAT_CLI:-/opt/etherlab/bin/ethercat}
 master=${1:-0}
 position=${2:-0}
-if (( $# > 2 )) || [[ ! $master =~ ^[0-9]+$ || ! $position =~ ^[0-9]+$ ]]; then
-  echo "Usage: bash reset_g5_fault.sh [master_index] [ring_position]" >&2
+serial=${3:-0}
+if [[ ! $serial =~ ^[0-9]+$ ]]; then echo "Expected a decimal drive serial" >&2; exit 2; fi
+if (( $# > 3 )) || [[ ! $master =~ ^[0-9]+$ || ! $position =~ ^[0-9]+$ ]]; then
+  echo "Usage: bash reset_g5_fault.sh [master_index] [ring_position] [serial]" >&2
   exit 2
 fi
 
@@ -23,7 +25,8 @@ write_controlword() {
 # Run with the cyclic application stopped and exclusive control of this master.
 master_state=$("${bus[@]}" master)
 slave_state=$("${slave[@]}" slaves)
-if ! grep -q 'Active: no' <<<"$master_state" ||
+if ! grep -q 'Phase: Idle' <<<"$master_state" ||
+   ! grep -q 'Active: no' <<<"$master_state" ||
    ! grep -q '[[:space:]]PREOP[[:space:]]' <<<"$slave_state"; then
   echo "Fault reset requires an idle master and the selected slave in PREOP." >&2
   exit 1
@@ -35,6 +38,13 @@ if [[ $(read_object uint32 0x1018 1) != 0x00000083 ||
   exit 1
 fi
 
+if (( serial )); then
+  actual_serial=$(read_object uint32 0x1018 4)
+  (( actual_serial == serial )) || { echo "Drive serial mismatch" >&2; exit 1; }
+elif [[ $position != 0 || $("${bus[@]}" slaves | wc -l) != 1 ]]; then
+  echo "Supply the commissioned drive serial for a multi-drive ring" >&2
+  exit 1
+fi
 status=$(read_object uint16 0x6041 0)
 if (( (status & 0x0004) != 0 )); then
   echo "Refusing reset while operation is enabled." >&2
@@ -50,6 +60,8 @@ if (( (status & 0x004f) != 0x0008 )); then
 fi
 
 before=$(read_object uint16 0x603f 0)
+detail=$(read_object uint16 0x4001 0)
+printf 'Before reset: error %s detail %s status %s\n' "$before" "$detail" "$status"
 write_controlword 0
 trap 'write_controlword 0' EXIT
 trap 'exit 130' INT

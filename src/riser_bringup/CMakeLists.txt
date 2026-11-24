@@ -2,10 +2,12 @@ cmake_minimum_required(VERSION 3.16)
 project(riser_bringup)
 find_package(ament_cmake REQUIRED)
 install(DIRECTORY urdf config worlds launch DESTINATION share/${PROJECT_NAME})
-install(PROGRAMS scripts/physical_states.py scripts/force_plate_frames.py
+install(FILES scripts/actuator_mapping.py DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/g5_calibration.py scripts/physical_states.py scripts/force_plate_frames.py
   scripts/ankle_plot_wrenches.py DESTINATION lib/${PROJECT_NAME})
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_pytest_test(test_g5_calibration test/test_g5_calibration.py)
   ament_add_pytest_test(test_xacro test/test_xacro.py)
   ament_add_pytest_test(test_reference_limits test/test_reference_limits.py)
 endif()

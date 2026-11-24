@@ -1,0 +1,66 @@
+#!/usr/bin/env python3
+"""Read one typed object on the identified axis, outside the control loop."""
+
+import argparse
+import re
+import subprocess
+import sys
+
+
+def main():
+    p = argparse.ArgumentParser()
+    for name in ("master", "position", "serial", "index", "subindex"):
+        p.add_argument(name, type=lambda text: int(text, 0))
+    p.add_argument(
+        "datatype", choices=["uint8", "int8", "uint16", "int16", "uint32", "int32"]
+    )
+    args = p.parse_args()
+    if not (
+        0 <= args.master <= 255
+        and 0 <= args.position <= 65535
+        and 0 <= args.serial <= 0xFFFFFFFF
+        and 0 <= args.index <= 65535
+        and 0 <= args.subindex <= 255
+    ):
+        p.error("Master, identity or object address outside range")
+    bus = ["/opt/etherlab/bin/ethercat", "-m", str(args.master)]
+
+    def read(*cmd):
+        result = subprocess.run(
+            [*bus, *cmd], capture_output=True, text=True, timeout=3, check=False
+        )
+        if result.returncode:
+            raise ValueError(result.stderr.strip() or result.stdout.strip())
+        return result.stdout.strip()
+
+    ring = read("slaves").splitlines()
+    if args.serial == 0 and (len(ring) != 1 or args.position != 0):
+        raise ValueError(
+            "A unique serial is required outside the single bottom-drive bench"
+        )
+
+    def upload(dtype, index, sub):
+        return read(
+            "-p", str(args.position), "upload", "-t", dtype, hex(index), str(sub)
+        )
+
+    for sub, expected in enumerate([0x83, 4, 0x20001, args.serial], 1):
+        if sub == 4 and not expected:
+            continue
+        if int(upload("uint32", 0x1018, sub).split()[0], 0) != expected:
+            raise ValueError("Axis identity mismatch at 0x1018:" + str(sub))
+    value = upload(args.datatype, args.index, args.subindex)
+    width = int(re.search(r"\d+", args.datatype)[0])
+    raw = int(value.split()[0], 0) & ((1 << width) - 1)
+    print(
+        f"{args.index:#06x}:{args.subindex:02x} {args.datatype}  0x{raw:0{width // 4}x}  ({value})"
+    )
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except subprocess.TimeoutExpired:
+        sys.exit("SDO upload timed out")
+    except (ValueError, OSError) as exc:
+        sys.exit(str(exc))

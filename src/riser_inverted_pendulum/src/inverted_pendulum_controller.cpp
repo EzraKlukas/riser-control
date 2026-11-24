@@ -19,21 +19,20 @@ double backboard_rate_limit(const std::string &description) {
       const double rate = std::stod(joint.parameters.at("velocity_limit"));
       if (std::isfinite(rate) && rate > 0.)
         return rate;
-      throw std::invalid_argument("Invalid backboard velocity_limit in robot description");
+      throw std::invalid_argument(
+          "Invalid backboard velocity_limit in robot description");
     }
   }
-  throw std::invalid_argument("Missing backboard_pitch resource in robot description");
+  throw std::invalid_argument(
+      "Missing backboard_pitch resource in robot description");
 }
 } // namespace
 
 controller_interface::InterfaceConfiguration
 InvertedPendulumController::state_interface_configuration() const {
   std::vector<std::string> names;
-  for (const auto &joint : joint_names_) {
-    for (const auto *interface : JointInterfaceNames) {
-      names.push_back(joint + "/" + interface);
-    }
-  }
+  for (const auto *interface : JointInterfaceNames)
+    names.push_back(joint_name_ + "/" + interface);
   for (const auto *name : WrenchInterfaceNames)
     names.push_back(wrench_source_name_ + "/" + name);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
@@ -42,18 +41,15 @@ InvertedPendulumController::state_interface_configuration() const {
 
 controller_interface::InterfaceConfiguration
 InvertedPendulumController::command_interface_configuration() const {
-  std::vector<std::string> names;
-  for (const auto &joint : joint_names_) {
-    names.push_back(joint + "/velocity");
-  }
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
-          names};
+          {joint_name_ + "/velocity"}};
 }
 
 Callback InvertedPendulumController::on_init() {
   reset();
   try {
     const logic::Parameters defaults;
+    auto_declare<std::string>("mode", "backboard");
     auto_declare("viscosity", defaults.viscosity);
     auto_declare("mass", defaults.mass);
     auto_declare("height", defaults.height);
@@ -81,16 +77,21 @@ InvertedPendulumController::on_configure(const rclcpp_lifecycle::State &) {
   try {
     logic::Parameters parameters;
     const auto node = get_node();
+    if (node->get_parameter("mode").as_string() != "backboard")
+      throw std::invalid_argument("Only backboard has an implemented control "
+                                  "law; footplate and ML are unavailable");
     parameters.viscosity = node->get_parameter("viscosity").as_double();
     parameters.mass = node->get_parameter("mass").as_double();
     parameters.height = node->get_parameter("height").as_double();
     const double requested_rate =
         node->get_parameter("max_backboard_rate_rad_s").as_double();
     if (!std::isfinite(requested_rate) || requested_rate < 0.)
-      throw std::invalid_argument("max_backboard_rate_rad_s must be finite and nonnegative");
+      throw std::invalid_argument(
+          "max_backboard_rate_rad_s must be finite and nonnegative");
     const double model_rate = backboard_rate_limit(get_robot_description());
     parameters.max_backboard_rate_rad_s =
-        requested_rate == 0. ? model_rate : std::min(requested_rate, model_rate);
+        requested_rate == 0. ? model_rate
+                             : std::min(requested_rate, model_rate);
     parameters.is_male = node->get_parameter("is_male").as_bool();
     if (const auto *error = logic_.configure(parameters)) {
       RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
@@ -109,11 +110,10 @@ Callback
 InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
   reset();
   active_.store(true);
-  for (std::size_t joint = 0; joint < kNumAngularJoints; ++joint) {
+  {
     for (std::size_t component = 0; component < JointInterfaceNames.size();
          ++component) {
-      const auto name =
-          joint_names_[joint] + "/" + JointInterfaceNames[component];
+      const auto name = joint_name_ + "/" + JointInterfaceNames[component];
       const auto found = std::find_if(
           state_interfaces_.begin(), state_interfaces_.end(),
           [&](const auto &interface) { return interface.get_name() == name; });
@@ -123,10 +123,9 @@ InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
         reset();
         return Callback::ERROR;
       }
-      joint_interfaces_[joint].state_handles[component] = &*found;
+      backboard_.state_handles[component] = &*found;
     }
-    const auto command_interface_name =
-        joint_names_[joint] + "/" + kCommandInterface;
+    const auto command_interface_name = joint_name_ + "/" + kCommandInterface;
     const auto found =
         std::find_if(command_interfaces_.begin(), command_interfaces_.end(),
                      [&](const auto &interface) {
@@ -138,7 +137,7 @@ InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
       reset();
       return Callback::ERROR;
     }
-    joint_interfaces_[joint].command_handle = &*found;
+    backboard_.command_handle = &*found;
   }
   for (std::size_t component = 0; component < WrenchInterfaceNames.size();
        ++component) {
@@ -158,9 +157,9 @@ InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
     wrench_interface_.handles[component] = &*found;
   }
 
-  const double measured_mass_kg = wrench_interface_.handles[MASS]
-                                      ->get_optional(1)
-                                      .value_or(logic::Unavailable);
+  const double measured_mass_kg =
+      wrench_interface_.handles[MASS]->get_optional(1).value_or(
+          logic::Unavailable);
   if (const auto *error = logic_.activate(measured_mass_kg)) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
     reset();
@@ -195,55 +194,29 @@ bool InvertedPendulumController::read_torque(
   if (values[VALID] != 0. && values[VALID] != 1.)
     return false;
   sample.T_x = values[TX];
-  sample.T_y = values[TY];
   sample.sample_time_s = values[SAMPLE_TIME];
   sample.valid = values[VALID];
   return true;
 }
 
-bool InvertedPendulumController::read_joints(
-    std::array<logic::JointSample, kNumAngularJoints> &sample) const {
-  for (std::size_t joint = 0; joint < kNumAngularJoints; ++joint) {
-    std::array<double, JointInterfaceNames.size()> values{};
-    for (std::size_t i = 0; i < values.size(); ++i) {
-      if (!joint_interfaces_[joint].state_handles[i])
-        return false;
-      const auto value =
-          joint_interfaces_[joint].state_handles[i]->get_optional(1);
-      if (!value)
-        return false;
-      values[i] = *value;
-      sample[joint].position = values[POSITION];
-      sample[joint].velocity = values[VELOCITY];
-      sample[joint].effort = values[EFFORT];
-    }
-  }
-  return true;
-}
-
 bool InvertedPendulumController::read_inputs(logic::Inputs &inputs) const {
-  std::array<logic::JointSample, kNumAngularJoints> joints{};
-  if (!read_joints(joints) || !read_torque(inputs.ankle_wrench))
+  const auto position = backboard_.state_handles[POSITION]->get_optional(1);
+  const auto velocity = backboard_.state_handles[VELOCITY]->get_optional(1);
+  if (!position || !velocity)
     return false;
-  inputs.theta_bb = joints[THETA_BB];
-  inputs.theta_ml = joints[THETA_ML];
-  inputs.theta_fp = joints[THETA_FP];
-  return true;
+  inputs.theta_bb.position = *position;
+  inputs.theta_bb.velocity = *velocity;
+  return read_torque(inputs.ankle_wrench);
 }
 
 bool InvertedPendulumController::send_commands(
     const std::array<double, kNumAngularJoints> &commands) {
-  for (std::size_t joint = 0; joint < kNumAngularJoints; ++joint) {
-    if (!joint_interfaces_[joint].command_handle->set_value(commands[joint])) {
-      return false;
-    }
-  }
-  return true;
+  return backboard_.command_handle->set_value(commands[THETA_BB]);
 }
 
 void InvertedPendulumController::reset() {
   logic_.deactivate();
-  joint_interfaces_ = {};
+  backboard_ = {};
   wrench_interface_ = {};
   active_.store(false);
 }

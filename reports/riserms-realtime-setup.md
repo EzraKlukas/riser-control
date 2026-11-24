@@ -1,5 +1,8 @@
 # riserms realtime and EtherCAT setup
 
+For current drive settings, motion-inhibited first contact, and the powered-test prerequisites, use the [G5 motion bringup checklist](g5-motion-bringup.md).
+
+
 ## Operating configuration
 
 riserms is a Minisforum MS-01 running Ubuntu 24.04.5 LTS amd64 with
@@ -368,9 +371,11 @@ config["controller_manager"]["ros__parameters"].update(
 config["motor_profile"]["ros__parameters"]["speed_rad_s"] = 0.0
 Path(sys.argv[1]).write_text(yaml.safe_dump(config, sort_keys=False))
 PY
+# Repeat the launch with FEEDBACK=true for the second run.
+FEEDBACK=false
 # Use these reference bounds only if they fit the approved shaft limits.
 ros2 launch riser_motion_bringup bottom_motor.launch.py \
-  commissioning_disabled:=1 sync0_shift_ns:=650000 \
+  commissioning_disabled:=1 sync0_shift_ns:=650000 feedback:="$FEEDBACK" \
   controllers_file:="$RUN/controllers.yaml" \
   max_velocity_rad_s:=0.1047197551 max_travel_rad:=0.05 \
   2>&1 | tee "$RUN/disabled-launch.log"
@@ -378,8 +383,8 @@ ros2 launch riser_motion_bringup bottom_motor.launch.py \
 
 From the second terminal, set `RUN` to the printed path, source
 the same ROS environment, and set the same ROS domain. Wait for OP and
-check the domain WKC and interface claims. On the feedback run, start
-the broadcaster and confirm stationary feedback and `ready=1`. Observe
+check the domain WKC and interface claims. On the feedback run, confirm
+that the launched broadcasters show stationary feedback and `ready=1`. Observe
 at least 60 seconds of OP per run.
 
 ```bash
@@ -389,8 +394,6 @@ EC=/opt/etherlab/bin/ethercat
 ros2 control list_controllers
 ros2 control list_hardware_interfaces
 # Feedback run only.
-ros2 run controller_manager spawner joint_state_broadcaster \
-  --param-file "$RUN/controllers.yaml"
 ros2 topic echo --once /dynamic_joint_states
 ```
 
@@ -424,15 +427,14 @@ ros2 launch riser_motion_bringup bottom_motor.launch.py \
   2>&1 | tee "$RUN/hold-launch.log"
 ```
 
-Start the state broadcaster in the second terminal, then leave the
+Start the host recorder in the second terminal, then leave the
 feedback monitor running. Before activation, verify OP with WKC `3/3`
 on this fresh start, check the kernel log for DC sync warnings, and
 confirm stationary, finite feedback with `ready=1`. Record the
 initial position.
 
 ```bash
-ros2 run controller_manager spawner joint_state_broadcaster \
-  --param-file "$RUN/controllers.yaml"
+ros2 run riser_motion_bringup g5_trial start zero_hold /dynamic_joint_states /g5_plot/dynamic_joint_states
 ros2 topic echo /dynamic_joint_states
 ```
 
@@ -469,7 +471,7 @@ bash src/riser_hardware/scripts/shutdown_bottom_motor.sh --stop-profile
 ```
 
 Confirm idle/PREOP, zero alarm and detail, and a disabled statusword.
-Then stop the launch.
+Then finalize the recording with `ros2 run riser_motion_bringup g5_trial stop`, retain its reported rates and loss counts, and stop the launch.
 
 ## Remote LUKS unlock
 

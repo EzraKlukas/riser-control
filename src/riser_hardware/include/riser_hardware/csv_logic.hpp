@@ -45,24 +45,30 @@ struct Feedback {
 class CsvGuard {
   // IgH's G5 DC acquisition has taken just over five seconds on the Jetson.
   static constexpr double kAcquisitionTimeout = 10;
-  bool seen_ = false, enabled_ = false, fault_ = false;
+  bool seen_ = false, enabled_ = false;
+  unsigned fault_ = 0;
   double elapsed_ = 0, origin_ = 0;
 
 public:
   void reset() {
-    seen_ = enabled_ = fault_ = false;
+    seen_ = enabled_ = false;
+    fault_ = 0;
     elapsed_ = origin_ = 0;
   }
-  void trip() { fault_ = true; }
+  void trip(unsigned reason = 1) {
+    if (!fault_)
+      fault_ = reason;
+  }
+  unsigned reason() const { return fault_; }
   bool fault() const { return fault_; }
   double observe(const Feedback &f, double dt, double cycle, double max_speed,
                  double max_travel, bool claimed = true) {
     elapsed_ += dt;
     if (!std::isfinite(dt) || dt <= 0 || (seen_ && dt > 5 * cycle))
-      trip();
+      trip(2);
     if (!f.healthy) {
       if (seen_ || elapsed_ > kAcquisitionTimeout)
-        trip();
+        trip(3);
       return 0;
     }
     if (!seen_)
@@ -72,13 +78,18 @@ public:
     // G5 reports mode 0 while servo operation is disabled (I576 A-1-5).
     const bool valid_mode = f.mode == 9 || (!enabled && f.mode == 0);
     if ((claimed && enabled_ && !enabled) || (f.status & 0x006f) == 0x0007)
-      trip();
+      trip(4);
     enabled_ = claimed && enabled;
-    if (!std::isfinite(f.position) || !std::isfinite(f.velocity) ||
-        (f.status & 8) || std::abs(f.position - origin_) >= max_travel ||
-        std::abs(f.velocity) > max_speed ||
-        !valid_mode)
-      trip();
+    if (f.status & 8)
+      trip(5);
+    if (!std::isfinite(f.position) || !std::isfinite(f.velocity))
+      trip(6);
+    if (std::abs(f.position - origin_) >= max_travel)
+      trip(7);
+    if (std::abs(f.velocity) > max_speed)
+      trip(8);
+    if (!valid_mode)
+      trip(9);
     return fault_ ? 0 : (enabled ? 2 : 1);
   }
 };

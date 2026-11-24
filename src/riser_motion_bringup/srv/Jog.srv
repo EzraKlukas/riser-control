@@ -1,0 +1,8 @@
+# Client ROS time. Clocks must agree to within the host acceptance window.
+builtin_interfaces/Time stamp
+float64 velocity_rad_s
+float64 duration_s
+bool cancel
+---
+bool accepted
+string message

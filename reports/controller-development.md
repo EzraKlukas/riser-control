@@ -356,6 +356,17 @@ Sourcing ROS alone does not provide a compilation database or reconfigure an
 already running language server. Hard-coded editor include-path lists tend to
 hide the actual build settings.
 
+For `bottom_csv_system.cpp`, use the IgH-enabled `riser_hardware` build
+(`RISER_WITH_IGH=ON`). If that build already exists, source the ROS environment
+and regenerate its compilation database from the workspace root:
+
+```bash
+cmake -S src/riser_hardware -B build/riser_hardware -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
+The compile command for `bottom_csv_system.cpp` then includes the IgH header
+directory detected by CMake.
+
 ## 8. Timing and handoff checks
 
 Keep allocation, model/YAML parsing, parameter calls, blocking I/O, blocking

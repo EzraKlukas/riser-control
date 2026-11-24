@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""Send a stamped finite jog and maintain its laptop heartbeat."""
+
+import argparse
+import time
+
+import rclpy
+from builtin_interfaces.msg import Time
+from rclpy.node import Node
+
+from riser_motion_bringup.srv import Jog
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--axis", choices=["bottom", "top", "torso", "hip"], default="bottom"
+    )
+    parser.add_argument("--velocity", type=float, default=0.0)
+    parser.add_argument("--duration", type=float, default=1.0)
+    parser.add_argument("--cancel", action="store_true")
+    args = parser.parse_args()
+    controller = (
+        "/motor_profile" if args.axis == "bottom" else "/" + args.axis + "_profile"
+    )
+    rclpy.init()
+    node = Node("g5_jog_client")
+    try:
+        client = node.create_client(Jog, controller + "/jog")
+        beat = node.create_publisher(Time, controller + "/jog_heartbeat", 1)
+        if not client.wait_for_service(timeout_sec=3):
+            raise SystemExit("Jog service unavailable")
+        req = Jog.Request(
+            stamp=node.get_clock().now().to_msg(),
+            velocity_rad_s=args.velocity,
+            duration_s=args.duration,
+            cancel=args.cancel,
+        )
+        future = client.call_async(req)
+        rclpy.spin_until_future_complete(node, future, timeout_sec=0.5)
+        if not future.done():
+            raise SystemExit("Jog acknowledgment timed out")
+        result = future.result()
+        if not result.accepted:
+            raise SystemExit(result.message)
+        print(result.message, flush=True)
+        end = time.monotonic() + args.duration
+        while not args.cancel and time.monotonic() < end and rclpy.ok():
+            beat.publish(req.stamp)
+            rclpy.spin_once(node, timeout_sec=0.05)
+    finally:
+        node.destroy_node()
+        rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    main()

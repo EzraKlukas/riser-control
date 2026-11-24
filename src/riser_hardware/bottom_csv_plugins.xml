@@ -1,1 +1,1 @@
-<library path="riser_bottom_csv"><class name="riser_hardware/BottomCsvSystem" type="riser_hardware::BottomCsvSystem" base_class_type="hardware_interface::SystemInterface"><description>Single Omron G5 motor CSV bringup using IgH.</description></class></library>
+<library path="riser_bottom_csv"><class name="riser_hardware/BottomCsvSystem" type="riser_hardware::BottomCsvSystem" base_class_type="hardware_interface::SystemInterface"><description>One to four named Omron G5 drives sharing a stock IgH master and CSV domain.</description></class></library>

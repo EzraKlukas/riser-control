@@ -51,7 +51,7 @@
     <xacro:if value="${backend != 'none'}">
       <ros2_control name="RiserSystem" type="system">
         <hardware>
-          <plugin>${'mock_components/GenericSystem' if backend == 'mock' else ('riser_gazebo/AngularSystem' if backend == 'gazebo' else 'riser_hardware/EthercatBoundary')}</plugin>
+          <plugin>${dict(mock='mock_components/GenericSystem', gazebo='riser_gazebo/AngularSystem')[backend]}</plugin>
           <param name="physical_state_rate">${c['physical_state_rate_hz']}</param>
           <param name="command_mode">${dict(position='position', velocity='velocity', angular_position='angular_position', angular_velocity='angular_velocity', actuator_position='actuator_position', actuator_velocity='actuator_velocity')[command_mode]}</param>
           <xacro:pitch_parameters prefix="top" />
@@ -88,7 +88,7 @@
           <xacro:force_plate_state name="right_force_plate" side="right" />
         </xacro:if>
         <!-- Virtual actuator resources belong to the custom Gazebo adapter.
-             Mock/EtherCAT retain their existing three-coordinate contract. -->
+             The mock backend retains its three-coordinate contract. -->
         <xacro:if value="${backend == 'gazebo'}">
           <xacro:public_control_joint name="top_actuator" resource_type="gpio"
               lower="${k['joints']['top_actuator']['lower']}"
