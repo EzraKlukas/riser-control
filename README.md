@@ -77,6 +77,10 @@ one quarter of the stroke from the lower switch for the bottom axis. Logs report
 each switch and when home is commanded. Home completion checks the **command**;
 that position stays applied while the next actuator calibrates and after the
 sequence finishes. It does not certify that physical motion has settled.
+Each completed actuator exposes `result.<actuator>.negative_travel_m`,
+`result.<actuator>.positive_travel_m`, and `result.<actuator>.valid` as
+controller parameters. The controller requests only the actuator resources
+declared in the robot description, including a bottom-only description.
 Simulated switches sit 3 mm inside the hard stops to accommodate servo tracking
 error. Home is calculated from those measured switch positions, so it can differ
 slightly from the geometric zero (including about 1.5 mm for the bottom target).

@@ -23,6 +23,10 @@
       </state_interface>
       <state_interface name="velocity" />
       <state_interface name="effort" />
+      <xacro:if value="${resource_type == 'gpio'}">
+        <state_interface name="limit_switch_lower" />
+        <state_interface name="limit_switch_upper" />
+      </xacro:if>
     </xacro:element>
   </xacro:macro>
 

@@ -63,6 +63,15 @@ For maintenance, deactivate command owners and complete the ordered PREOP shutdo
 
 ## Calibration and balance
 
+The shared calibration controller discovers enabled `*_actuator` resources
+from the robot description and uses `position` commands and feedback in
+metres, plus active-high `limit_switch_lower` and `limit_switch_upper`.
+Gazebo provides this contract. To expose it on G5 hardware, commission the
+signed metres per shaft radian and the actuator zero, then implement and
+verify a bounded linear position adapter over CSV with correct endpoint
+polarity, stale feedback handling and exclusive command ownership. The
+current G5 launch exposes shaft velocity and uses the passive procedure below.
+
 For a bench-only launch, start the passive observer explicitly with `ros2 run riser_bringup g5_calibration.py`. The real full launch includes it. Capture the stationary negative and positive switch positions and the independently established flat/vertical/centred zero with the Motion buttons. Each capture requires fresh healthy feedback and the corresponding switch combination. No calibration service commands a motor. The observer exports `/g5_calibration/state` and protected `result.<axis>_motor.{zero,negative_travel,positive_travel,units,valid}` parameters. A missing/stale/faulted axis invalidates its session references.
 
 The existing powered Gazebo procedure drives **position targets in metres**, finds both switches, and commands home at a quarter of bottom stroke or half of the other strokes. Physical G5 CSV uses **motor-shaft radians**. Verify the signed metres per shaft radian, which physical switch defines each endpoint, and how the operator measures flat or vertical before authorizing automatic travel. The observer accepts a startup parameter such as `bottom_motor.metres_per_rad` only from verified commissioning data. Zero leaves the angle unavailable. Calibrated shaft displacement passes through the existing CAD branch and neutral offset for pitch. ML requires both calibrated slides and the documented height projection. No encoder calibration survives a feedback-session loss.

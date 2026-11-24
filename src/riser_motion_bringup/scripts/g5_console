@@ -336,7 +336,7 @@ class Console(W.QWidget):
                 return hex(int(x))
             return f"{x:.6g}"
 
-        self.readout.setPlainText(
+        readout = (
             ("Stale" if stale else "Live")
             + "   enabled: "
             + getattr(self, "hw", {}).get("enabled_axes", "?")
@@ -356,6 +356,12 @@ class Console(W.QWidget):
                 for k in ("footplate_rad", "ml_rad", "backboard_rad")
             )
         )
+
+        if readout != self.readout.toPlainText():
+            scrollbar = self.readout.verticalScrollBar()
+            scroll = scrollbar.value()
+            self.readout.setPlainText(readout)
+            scrollbar.setValue(scroll)
 
     def poll(self):
         nodes = self.node.get_node_names_and_namespaces()

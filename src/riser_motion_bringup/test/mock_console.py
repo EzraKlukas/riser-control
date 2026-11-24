@@ -73,6 +73,14 @@ def check(axes):
                 assert set(window.excluded) == {"bottom", "top", "torso", "hip"} - set(
                     axes.split(",")
                 )
+                window.readout.setFixedHeight(100)
+                scrollbar = window.readout.verticalScrollBar()
+                until(lambda: scrollbar.maximum() > 2)
+                scrollbar.setValue(2)
+                window.readout.setPlainText("previous sample\n" * 30)
+                scrollbar.setValue(2)
+                window.tick()
+                assert scrollbar.value() == 2
                 for state in ("active", "inactive"):
                     subprocess.run(
                         [

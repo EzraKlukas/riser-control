@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <controller_interface/controller_interface.hpp>
 #include <string>
+#include <vector>
 
 namespace riser_calibration_controller {
 
@@ -43,6 +45,14 @@ private:
     double target = 0, lower_position = 0, upper_position = 0, home = 0;
   };
   std::array<Actuator, kNumActuators> actuators_{};
+  std::vector<std::size_t> enabled_;
+  struct ResultParameters {
+    std::atomic<double> negative{0}, positive{0};
+    std::atomic<bool> valid{false};
+  };
+  std::array<ResultParameters, kNumActuators> results_{};
+  rclcpp::TimerBase::SharedPtr results_timer_;
+  void publish_results();
   std::size_t current_actuator_ = 0;
   double phase_seconds_ = 0;
   bool failed_ = false;

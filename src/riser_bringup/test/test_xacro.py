@@ -42,11 +42,10 @@ def test_angular_interfaces_and_shared_geometry():
                     assert [x.get("name") for x in j.findall("command_interface")] == commands
                     for parameter in ("lower", "upper", "velocity_limit"):
                         assert j.find(f"param[@name='{parameter}']") is not None
-                    assert [x.get("name") for x in j.findall("state_interface")] == [
-                        "position",
-                        "velocity",
-                        "effort",
-                    ]
+                    states = ["position", "velocity", "effort"]
+                    if j.tag == "gpio":
+                        states += ["limit_switch_lower", "limit_switch_upper"]
+                    assert [x.get("name") for x in j.findall("state_interface")] == states
             for limit in root.findall("joint/limit"):
                 limit.attrib.pop("velocity", None)
             signatures.append([E.tostring(j) for j in root.findall("joint")])
