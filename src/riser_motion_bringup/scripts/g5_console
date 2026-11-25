@@ -667,7 +667,9 @@ class Console(W.QWidget):
         )
 
     def shutdown_drive(self):
-        self.address()
+        if self.axis.currentText() != "bottom_motor":
+            raise ValueError("Select the bottom axis for ordered shutdown")
+        address = self.address()
         self.remote(
             ["bash", "src/riser_hardware/scripts/shutdown_bottom_motor.sh"]
             + (
@@ -675,6 +677,7 @@ class Console(W.QWidget):
                 if "motor_profile  active" in self.snapshot.get("controllers", "")
                 else []
             )
+            + address
         )
 
     def upload(self):

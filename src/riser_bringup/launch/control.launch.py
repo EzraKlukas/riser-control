@@ -19,6 +19,11 @@ import xacro
 def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
     if backend == "ethercat":
+        if LaunchConfiguration("calibrate").perform(context) == "true":
+            raise ValueError(
+                "Powered calibration requires linear actuator position control. "
+                "Use the passive G5 reference capture services in the normal EtherCAT launch."
+            )
         launch = (
             Path(get_package_share_directory("riser_motion_bringup"))
             / "launch/bottom_motor.launch.py"

@@ -32,7 +32,7 @@ def test_bottom_only_references():
                         "ready",
                         "feedback_valid",
                     ],
-                    values=[position, 0.0, neg, pos, 2.0, healthy],
+                    values=[position, 0.0, neg, pos, 1.0, healthy],
                 )
             ],
         )

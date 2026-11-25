@@ -80,10 +80,14 @@ public:
     settings_.max_period =
         get_node()->get_parameter("max_period_s").as_double();
     jog_mode_ = get_node()->get_parameter("jog_mode").as_bool();
-    if (jog_mode_)
-      settings_.profile = "ramp"; // A signed jog never reverses mid-request.
     speed_cap_ = get_node()->get_parameter("max_velocity_rad_s").as_double();
     duration_cap_ = get_node()->get_parameter("max_duration_s").as_double();
+    if (jog_mode_) {
+      // Activation holds zero. Each jog supplies its own speed and duration.
+      settings_.profile = "ramp";
+      settings_.speed = 0.;
+      settings_.duration = duration_cap_;
+    }
     if (joint_.empty() || !std::isfinite(speed_cap_) ||
         !std::isfinite(duration_cap_) || speed_cap_ <= 0 ||
         duration_cap_ <= 0 || std::abs(settings_.speed) > speed_cap_ ||

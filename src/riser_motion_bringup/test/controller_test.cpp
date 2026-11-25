@@ -55,6 +55,21 @@ int main(int argc, char **argv) {
   if (controller.on_activate(state) != Callback::ERROR)
     return 8;
   controller.release_interfaces();
+
+  // A legacy profile in the file must not block the jog-only controller.
+  const auto node = controller.get_node();
+  for (const auto &result : node->set_parameters({
+           rclcpp::Parameter("jog_mode", true),
+           rclcpp::Parameter("speed_rad_s", 50.),
+           rclcpp::Parameter("duration_s", 50.),
+           rclcpp::Parameter("ramp_s", .25),
+       })) {
+    if (!result.successful)
+      return 10;
+  }
+  if (controller.on_configure(state) != Callback::SUCCESS ||
+      controller.state_interface_configuration().names.size() != 6)
+    return 11;
   rclcpp::shutdown();
   return 0;
 }

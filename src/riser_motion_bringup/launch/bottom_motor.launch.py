@@ -55,6 +55,8 @@ def setup(context):
         raise ValueError(
             "inputs_only requires force_plates and commissioning_disabled:=1"
         )
+    serial = LaunchConfiguration("serial").perform(context)
+    jog_ramp = LaunchConfiguration("jog_ramp_s").perform(context)
     selection = LaunchConfiguration("enabled_axes").perform(context)
     enabled = (
         []
@@ -91,6 +93,8 @@ def setup(context):
         for key in ["position", "alias"]:
             if name == "bottom" and values[key]:
                 axis[key] = int(values[key], 0)
+        if name == "bottom" and serial:
+            axis["serial"] = int(serial, 0)
         joint = name + "_motor"
         for key, value in axis.items():
             if backend == "real" and value is None:
@@ -120,8 +124,11 @@ def setup(context):
         controllers.append(controller)
         manager_params[controller] = deepcopy(controller_type)
         config[controller] = deepcopy(template)
-        config[controller]["ros__parameters"].setdefault("jog_mode", True)
-        config[controller]["ros__parameters"].update(
+        params = config[controller]["ros__parameters"]
+        params.setdefault("jog_mode", True)
+        if jog_ramp and params["jog_mode"]:
+            params["ramp_s"] = float(jog_ramp)
+        params.update(
             joint=joint,
             max_velocity_rad_s=float(values["max_velocity_rad_s"]),
             max_travel_rad=float(values["max_travel_rad"]),
@@ -308,6 +315,8 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument("enabled_axes", default_value=""),
         DeclareLaunchArgument("position", default_value=""),
+        DeclareLaunchArgument("serial", default_value=""),
+        DeclareLaunchArgument("jog_ramp_s", default_value=""),
         DeclareLaunchArgument("alias", default_value=""),
         DeclareLaunchArgument("sync0_shift_ns", default_value="650000"),
     ]

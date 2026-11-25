@@ -149,3 +149,52 @@ streams remained false.
 The bench returned to PREOP and the master was inactive after launch exit.
 Powered plate measurements and the combined G5/EK1100/ELM topology remain
 pending physical verification.
+
+### Bottom G5 behind the Beckhoff devices, with analog acquisition off
+
+On 2026-11-25 master 0 scanned EK1100 at position 0, ELM3604 at position 1,
+and bottom G5 at position 2 with serial `0x1601000f` (decimal `369164303`).
+The Beckhoff devices may remain powered with `force_plates:=false`. That
+selection creates no ELM PDO domain and loads no wrench controller. Use
+both the scanned position and serial to bind the motor. The position is
+an absolute IgH ring position.
+
+Use this launch for a disabled checkout of the motor and passive calibration:
+
+```bash
+ros2 launch riser_bringup control.launch.py backend:=ethercat \
+  force_plates:=false position:=2 serial:=0x1601000f \
+  jog_ramp_s:=0.25 commissioning_disabled:=1 load_motion_inactive:=true
+```
+
+If disabled checkout passes as described in the commissioning handoff, an
+operator-led motion session uses the same command with
+`commissioning_disabled:=0`. `motor_profile` still starts inactive.
+Explicit activation requests servo enable. The jog-ramp override permits
+short jogs within the normal duration cap. With jog mode enabled, the
+legacy profile's speed and duration are unused, and activation holds zero
+until a valid jog. Keep the independent stop and approved travel and speed
+limits from the handoff.
+
+For the bottom-only passive sequence, present the mechanical references
+under operator control. With stationary, healthy encoder feedback, capture
+the negative endpoint with only the negative switch asserted, the physical
+flat reference with neither switch asserted, and the positive endpoint with
+only the positive switch asserted. Use the Motion tab or the
+`/g5_calibration/bottom_motor/capture_{negative,zero,positive}` Trigger
+services. Results are in shaft radians and require no force-plate signal.
+The pre-existing travel cap still applies to any separately commanded jog.
+The Gazebo powered sequence requires a linear-position interface, verified
+transmission scaling and verified flat and endpoint references on the real
+machine.
+
+With motion ownership released, request ordered PREOP while the inhibited
+loop is still servicing the drive:
+
+```bash
+bash src/riser_hardware/scripts/shutdown_bottom_motor.sh 0 2 369164303
+```
+
+The helper accepts `--stop-profile` first if the motion profile needs to be
+deactivated. It checks the selected product, revision and serial before
+requesting PREOP. It reports any drive alarm after releasing the master.

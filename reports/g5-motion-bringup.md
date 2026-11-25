@@ -99,3 +99,36 @@ Paths below are relative to the repository root. The workspace retains the opera
 | Bringup in `src/riser_bringup/` | `CMakeLists.txt`, `package.xml`, `launch/control.launch.py`, `urdf/backends.xacro`, `scripts/g5_calibration.py`, `test/{test_g5_calibration,test_xacro}.py`. |
 | Balance in `src/riser_inverted_pendulum/` | `CMakeLists.txt`, `test/mode_test.cpp`, `include/riser_inverted_pendulum/inverted_pendulum_controller.hpp`, `src/inverted_pendulum_controller.cpp`. |
 | Handoff and trial storage | `README.md`, `src/riser_motion_bringup/README.md`, `reports/{g5-motion-bringup,riserms-ethercat-commissioning,riserms-realtime-setup}.md`, `.gitignore` (generated trial data). |
+
+## Motor-only checkout with the Beckhoff segment attached, 2026-11-25
+
+Master 0 scanned EK1100 at 0, ELM3604-0002 at 1 and R88D-KN04L-ECT
+at 2 (serial `0x1601000f`). With `force_plates:=false position:=2
+serial:=0x1601000f jog_ramp_s:=0.25 load_motion_inactive:=true`,
+the motor configured and reached OP. The ELM stayed in PREOP and
+the only domain was the 26-byte G5 LRW (expected WKC 3). The bottom
+velocity interface was unclaimed and the profile inactive. The transmitted
+controlword remained zero and the operation-enabled bit stayed clear.
+
+Before the exchange, the drive reported error and detail zero, Pn504/Pn505
+zero, and `0x60FD = 0x1c000000` with both limit bits clear at the observed
+position. The first run recorded 17 isolated WKC 2 cycles in 5,021 OP cycles,
+starting at OP sample 4,899. The host latched fault 3 and the cyclic drive
+code became `0xFFB2` (EtherCAT communication warning). The subsequent
+PREOP read showed `0xFF83` / `0xF383` (83.3, communications synchronization
+error). This read followed master release, so the exact onset of 83.3 was
+unresolved. [Omron I576, troubleshooting chapter](https://files.omron.eu/downloads/latest/manual/en/i576_accurax_g5_servomotors_drives_with_ethercat_control_users_manual_en.pdf?v=1)
+
+A second disabled run started with the drive fault still latched. Requesting
+the G5 as reference clock did not displace slave 0 in the master report, and
+the run logged six isolated WKC 2 samples in 61,686 OP cycles. The clock
+experiment was removed. The updated ordered helper moved the G5 to PREOP,
+released the master and surfaced the retained alarm. No fault reset was
+issued. Interlocks and host realtime settings remain as commissioned.
+
+The three passive bottom reference services appeared with force-plate
+acquisition disabled. The live capture guard refused the endpoint requests
+while the axis was unhealthy. The bottom-only mock verified zero and both
+signed travel distances with stationary feedback and simulated limit states.
+Motion is conditional on resolving the drive alarm and passing a sustained
+inhibited timing check. [Current motor-only launch and shutdown](../src/riser_motion_bringup/README.md#bottom-g5-behind-the-beckhoff-devices-with-analog-acquisition-off)
