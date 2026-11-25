@@ -44,15 +44,25 @@ std::vector<double> load_csv(const std::string &path) {
 }
 } // namespace
 
+bool WrenchAggregationController::uses_component(std::size_t plate,
+                                                  std::size_t component) const {
+  if (plate_mode_ == logic::PlateMode::Both)
+    return true;
+  return plate == (plate_mode_ == logic::PlateMode::Left ? 0U : 1U) &&
+         (component == 0 || component == 2 || component == 3 || component == 6);
+}
+
 controller_interface::InterfaceConfiguration
 WrenchAggregationController::state_interface_configuration() const {
   std::vector<std::string> names;
-  for (const auto &plate : plate_names_)
-    for (const auto *interface : PlateInterfaceNames)
-      names.push_back(plate + "/" + interface);
+  for (std::size_t plate = 0; plate < plate_names_.size(); ++plate)
+    for (std::size_t i = 0; i < PlateInterfaceNames.size(); ++i)
+      if (uses_component(plate, i))
+        names.push_back(plate_names_[plate] + "/" + PlateInterfaceNames[i]);
   if (!read_time_interface_name_.empty())
     names.push_back(read_time_interface_name_);
-  names.push_back(FootPitch);
+  if (!foot_pitch_interface_name_.empty())
+    names.push_back(foot_pitch_interface_name_);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
 }
@@ -100,6 +110,9 @@ Callback WrenchAggregationController::on_init() {
     auto_declare("right_wrench_transformation",
                  defaults.right.linear_transform);
     auto_declare("read_time_interface", std::string{});
+    auto_declare("foot_pitch_interface", std::string{FootPitch});
+    auto_declare("plate_mode", std::string{"both"});
+    auto_declare("single_plate_ankle_shift_left", defaults.single_plate_ankle_shift_left);
     const logic::PerturbationParameters perturbation;
     auto_declare("perturbation.multisine_peak_nm", perturbation.multisine_peak_nm);
     auto_declare("perturbation.multisine_low_hz", perturbation.multisine_low_hz);
@@ -196,6 +209,8 @@ void WrenchAggregationController::request_capture(logic::Capture mode,
                                                   CaptureReply reply) {
   if (!active_.load()) {
     reply(false, "Ankle wrench controller is inactive");
+  } else if (foot_pitch_interface_name_.empty() && mode != logic::Capture::StandingTare) {
+    reply(false, "Empty tare and mass measurement need verified footplate pitch feedback");
   } else if (capture_reply_) {
     reply(false, "A capture is already in progress");
   } else {
@@ -258,6 +273,19 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
   try {
     logic::Parameters parameters;
     const auto node = get_node();
+    const auto mode = node->get_parameter("plate_mode").as_string();
+    if (mode == "both")
+      plate_mode_ = logic::PlateMode::Both;
+    else if (mode == "left")
+      plate_mode_ = logic::PlateMode::Left;
+    else if (mode == "right")
+      plate_mode_ = logic::PlateMode::Right;
+    else
+      throw std::invalid_argument("plate_mode must be both, left or right");
+    parameters.plate_mode = plate_mode_;
+    parameters.single_plate_ankle_shift_left =
+        node->get_parameter("single_plate_ankle_shift_left").as_double_array();
+    foot_pitch_interface_name_ = node->get_parameter("foot_pitch_interface").as_string();
     parameters.left.ankle_to_origin =
         node->get_parameter("ankle_to_left_plate_origin").as_double_array();
     parameters.right.ankle_to_origin =
@@ -321,6 +349,8 @@ WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
   for (std::size_t plate = 0; plate < plate_names_.size(); ++plate) {
     for (std::size_t component = 0; component < PlateInterfaceNames.size();
          ++component) {
+      if (!uses_component(plate, component))
+        continue;
       const auto name =
           plate_names_[plate] + "/" + PlateInterfaceNames[component];
       const auto found = std::find_if(
@@ -349,16 +379,18 @@ WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
     }
     read_time_interface_ = &*found;
   }
-  const auto foot_pitch = std::find_if(
-      state_interfaces_.begin(), state_interfaces_.end(),
-      [](const auto &interface) { return interface.get_name() == FootPitch; });
-  if (foot_pitch == state_interfaces_.end()) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Missing state interface %s",
-                 FootPitch);
-    reset();
-    return Callback::ERROR;
+  if (!foot_pitch_interface_name_.empty()) {
+    const auto foot_pitch = std::find_if(
+        state_interfaces_.begin(), state_interfaces_.end(),
+        [&](const auto &interface) { return interface.get_name() == foot_pitch_interface_name_; });
+    if (foot_pitch == state_interfaces_.end()) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Missing state interface %s",
+                   foot_pitch_interface_name_.c_str());
+      reset();
+      return Callback::ERROR;
+    }
+    foot_pitch_interface_ = &*foot_pitch;
   }
-  foot_pitch_interface_ = &*foot_pitch;
   if (const auto *error = logic_.activate()) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
     reset();
@@ -385,7 +417,7 @@ bool WrenchAggregationController::read_sample(const PlateInterfaces &interfaces,
   std::array<double, PlateInterfaceNames.size()> values{};
   for (std::size_t i = 0; i < values.size(); ++i) {
     if (!interfaces.handles[i])
-      return false;
+      continue;
     const auto value = interfaces.handles[i]->get_optional(1);
     if (!value)
       return false;
@@ -400,8 +432,10 @@ bool WrenchAggregationController::read_sample(const PlateInterfaces &interfaces,
 }
 
 bool WrenchAggregationController::read_inputs(logic::Inputs &inputs) const {
-  return read_sample(plate_interfaces_[0], inputs.left) &&
-         read_sample(plate_interfaces_[1], inputs.right);
+  return (plate_mode_ == logic::PlateMode::Right ||
+          read_sample(plate_interfaces_[0], inputs.left)) &&
+         (plate_mode_ == logic::PlateMode::Left ||
+          read_sample(plate_interfaces_[1], inputs.right));
 }
 
 void WrenchAggregationController::publish_sample(
@@ -448,7 +482,7 @@ Return WrenchAggregationController::update_and_write_commands(
       logic_.begin_capture(request);
   }
   const double foot_pitch_rad =
-      logic_.capture_needs_flat_plate()
+      logic_.capture_needs_flat_plate() && foot_pitch_interface_
           ? foot_pitch_interface_->get_optional(1).value_or(logic::Unavailable)
           : logic::Unavailable;
   const auto playback = playback_.load();

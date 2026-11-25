@@ -50,6 +50,7 @@ private:
   struct PlateInterfaces {
     std::array<hardware_interface::LoanedStateInterface *, PlateInterfaceNames.size()> handles{};
   };
+  bool uses_component(std::size_t plate, std::size_t component) const;
   static bool read_sample(const PlateInterfaces &, logic::PlateSample &);
   bool read_inputs(logic::Inputs &) const;
   void publish_sample(const logic::WrenchSample &);
@@ -63,7 +64,8 @@ private:
   std::array<PlateInterfaces, 2> plate_interfaces_{};
   std::array<double, 8> output_values_{};
   logic::WrenchAggregationLogic logic_;
-  std::string read_time_interface_name_;
+  std::string read_time_interface_name_, foot_pitch_interface_name_;
+  logic::PlateMode plate_mode_ = logic::PlateMode::Both;
   hardware_interface::LoanedStateInterface *read_time_interface_ = nullptr;
   hardware_interface::LoanedStateInterface *foot_pitch_interface_ = nullptr;
   std::atomic<bool> active_{false};

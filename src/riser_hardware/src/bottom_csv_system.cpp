@@ -1,3 +1,4 @@
+#include "elm3604.hpp"
 #include "g5_axis.hpp"
 #include <algorithm>
 #include <chrono>
@@ -25,6 +26,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   ec_domain_t *domain_ = nullptr;
   uint8_t *data_ = nullptr;
   std::vector<G5Axis> axes_;
+  Elm3604 elm_;
+  int elm_position_ = -1, coupler_position_ = -1;
   std::vector<double> excluded_discovered_;
   double position_scale_ = 0, velocity_scale_ = 0, speed_limit_ = 0,
          travel_limit_ = 0;
@@ -54,17 +57,32 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
     ec_master_info_t bus{};
     if (ecrt_master(master_, &bus))
       throw std::runtime_error("Cannot read EtherCAT master inventory");
-    if (bus.scan_busy || !bus.link_up || bus.slave_count > 4)
+    if (bus.scan_busy || !bus.link_up || bus.slave_count > 6)
       throw std::runtime_error("EtherCAT topology unavailable: link " +
                                std::string(bus.link_up ? "up" : "down") +
                                ", slaves " + std::to_string(bus.slave_count) +
                                ", scan busy " + std::to_string(bus.scan_busy));
     std::vector<G5Identity> detected;
+    std::set<uint32_t> peripherals;
+    int elm = -1, coupler = -1;
     for (unsigned i = 0; i < bus.slave_count; ++i) {
       ec_slave_info_t found{};
       if (ecrt_master_get_slave(master_, i, &found))
         throw std::runtime_error("Cannot read slave identity at " +
                                  std::to_string(i));
+      if (found.vendor_id == Elm3604::vendor) {
+        if (found.product_code == Elm3604::coupler_product) {
+          if (coupler >= 0)
+            throw std::runtime_error("Ambiguous EK1100 topology");
+          coupler = i;
+          peripherals.insert(i);
+        } else if (found.product_code == Elm3604::product) {
+          if (elm >= 0 || found.revision_number != Elm3604::revision)
+            throw std::runtime_error("Duplicate or unsupported ELM3604-0002");
+          elm = i;
+          peripherals.insert(i);
+        }
+      }
       detected.push_back({found.vendor_id, found.product_code,
                           found.revision_number, found.alias,
                           found.serial_number});
@@ -81,15 +99,27 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
                            integer(name + "_alias"), integer(name + "_serial"),
                            enabled});
     }
-    validate_topology(addresses, detected);
+    validate_topology(addresses, detected, peripherals);
+    if (!elm_.name.empty() && (elm < 0 || coupler < 0))
+      throw std::runtime_error(
+          "Force-plate acquisition needs one EK1100 and one ELM3604");
+    if (!elm_.name.empty() && elm_position_ >= 0 &&
+        (elm != elm_position_ || coupler != coupler_position_))
+      throw std::runtime_error(
+          "Force-plate topology changed after configuration");
+    elm_position_ = elm;
+    coupler_position_ = coupler;
     for (size_t i = 0; i < info_.sensors.size(); ++i) {
       const auto &sensor = info_.sensors[i].name;
+      if (sensor == elm_.name)
+        continue;
       const auto name = sensor.substr(0, sensor.size() - 9) + "_motor";
       const auto found =
           std::find_if(addresses.begin(), addresses.end(),
                        [&](const auto &a) { return a.name == name; });
-      excluded_discovered_[i] =
-          found != addresses.end() && found->ring < detected.size();
+      excluded_discovered_[i] = found != addresses.end() &&
+                                found->ring < detected.size() &&
+                                !peripherals.count(found->ring);
     }
   }
   void release() {
@@ -97,6 +127,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
       ecrt_release_master(master_);
     master_ = nullptr;
     domain_ = nullptr;
+    elm_.release();
+    elm_position_ = coupler_position_ = -1;
     for (auto &a : axes_) {
       a.discovered = 0;
       a.feedback_valid = 0;
@@ -115,7 +147,9 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
       a.stage(data_, commissioning_disabled_, stopping, speed_limit_,
               velocity_scale_);
     }
-    const int queued = ecrt_domain_queue(domain_);
+    const int queued = domain_ ? ecrt_domain_queue(domain_) : 0;
+    if (!elm_.name.empty())
+      elm_.queue();
     const int sent = ecrt_master_send(master_);
     for (auto &a : axes_) {
       if (queued || sent) {
@@ -138,16 +172,34 @@ public:
     const auto &info = params.hardware_info;
     if (SystemInterface::on_init(params) !=
             hardware_interface::CallbackReturn::SUCCESS ||
-        info.joints.empty() || info.joints.size() > 4)
+        info.joints.size() > 4)
       return hardware_interface::CallbackReturn::ERROR;
     excluded_discovered_.assign(info.sensors.size(), NAN);
     for (const auto &sensor : info.sensors) {
+      if (sensor.name == "left_force_plate" ||
+          sensor.name == "right_force_plate") {
+        if (!elm_.name.empty() ||
+            sensor.state_interfaces.size() != Elm3604::states.size() ||
+            !std::all_of(Elm3604::states.begin(), Elm3604::states.end(),
+                         [&](const char *name) {
+                           return std::any_of(sensor.state_interfaces.begin(),
+                                              sensor.state_interfaces.end(),
+                                              [name](const auto &iface) {
+                                                return iface.name == name;
+                                              });
+                         }))
+          return hardware_interface::CallbackReturn::ERROR;
+        elm_.name = sensor.name;
+        continue;
+      }
       if (sensor.name.size() < 10 ||
           sensor.name.substr(sensor.name.size() - 9) != "_excluded" ||
           sensor.state_interfaces.size() != 1 ||
           sensor.state_interfaces[0].name != "discovered")
         return hardware_interface::CallbackReturn::ERROR;
     }
+    if (info.joints.empty() && elm_.name.empty())
+      return hardware_interface::CallbackReturn::ERROR;
     std::set<std::string> joint_names;
     const std::set<std::string> supported{"bottom_motor", "top_motor",
                                           "torso_motor", "hip_motor"};
@@ -179,9 +231,12 @@ public:
     std::vector<hardware_interface::StateInterface> result;
     for (auto &a : axes_)
       a.export_states(result);
+    if (!elm_.name.empty())
+      elm_.export_states(result);
     for (size_t i = 0; i < info_.sensors.size(); ++i)
-      result.emplace_back(info_.sensors[i].name, "discovered",
-                          &excluded_discovered_[i]);
+      if (info_.sensors[i].name != elm_.name)
+        result.emplace_back(info_.sensors[i].name, "discovered",
+                            &excluded_discovered_[i]);
     return result;
   }
   std::vector<hardware_interface::CommandInterface>
@@ -220,9 +275,29 @@ public:
       if (!master_)
         throw std::runtime_error("request master failed");
       check_topology();
-      domain_ = ecrt_master_create_domain(master_);
-      if (!domain_)
-        throw std::runtime_error("Cannot create PDO domain");
+      if (!axes_.empty()) {
+        domain_ = ecrt_master_create_domain(master_);
+        if (!domain_)
+          throw std::runtime_error("Cannot create motor PDO domain");
+      }
+      if (!elm_.name.empty()) {
+        if (cycle_ns_ != 1000000)
+          throw std::runtime_error("ELM3604 requires the 1 ms cycle");
+        if (!ecrt_master_slave_config(master_, 0, coupler_position_,
+                                      Elm3604::vendor,
+                                      Elm3604::coupler_product))
+          throw std::runtime_error("Cannot configure EK1100");
+        std::array<double, 3> scale{}, zero{};
+        for (unsigned i = 0; i < scale.size(); ++i) {
+          const auto channel = "elm_x" + std::to_string(i + 1);
+          scale[i] = number(channel + "_scale");
+          zero[i] = number(channel + "_zero");
+        }
+        elm_.configure(master_, elm_position_, scale, zero);
+        RCLCPP_INFO(rclcpp::get_logger("bottom_csv"),
+                    "EK1100 at %d, ELM3604 at %d for %s", coupler_position_,
+                    elm_position_, elm_.name.c_str());
+      }
       for (auto &a : axes_) {
         const auto ring = integer(a.name + "_position");
         a.rated_torque = number(a.name + "_rated_torque_nm");
@@ -235,8 +310,12 @@ public:
           throw std::runtime_error("Slave configuration failed: " + a.name);
         a.configure_pdos(domain_, cycle_ns_, shift);
       }
-      if (ecrt_master_activate(master_) || !(data_ = ecrt_domain_data(domain_)))
+      if (ecrt_master_activate(master_))
         throw std::runtime_error("master activation failed");
+      if (domain_ && !(data_ = ecrt_domain_data(domain_)))
+        throw std::runtime_error("Motor domain has no process data");
+      if (!elm_.name.empty())
+        elm_.bind();
     } catch (const std::exception &e) {
       RCLCPP_ERROR(rclcpp::get_logger("bottom_csv"), "%s", e.what());
       release();
@@ -246,7 +325,7 @@ public:
   }
   hardware_interface::CallbackReturn
   on_activate(const rclcpp_lifecycle::State &) override {
-    if (!data_)
+    if (!master_)
       return hardware_interface::CallbackReturn::ERROR;
     try {
       check_topology();
@@ -267,8 +346,9 @@ public:
   }
   hardware_interface::CallbackReturn
   on_deactivate(const rclcpp_lifecycle::State &) override {
-    if (data_)
+    if (active_)
       send(true);
+    elm_.invalidate();
     for (auto &a : axes_) {
       if (commissioning_disabled_ && active_)
         a.summary();
@@ -336,6 +416,10 @@ public:
     const double dt = std::chrono::duration<double>(interval).count();
     last_ = now;
     const int receive_result = ecrt_master_receive(master_);
+    if (!elm_.name.empty())
+      elm_.read(!time_result && !receive_result);
+    if (!domain_)
+      return hardware_interface::return_type::OK;
     const int process_result = ecrt_domain_process(domain_);
     ec_domain_state_t domain{};
     const int domain_result = ecrt_domain_state(domain_, &domain);

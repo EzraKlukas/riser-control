@@ -40,7 +40,11 @@ struct PlateParameters {
   double gain = 1.;
 };
 
+enum class PlateMode { Both, Left, Right };
+
 struct Parameters {
+  PlateMode plate_mode = PlateMode::Both;
+  std::vector<double> single_plate_ankle_shift_left{0.127, 0., 0.};
   PlateParameters left{{0.127, 0.1016, 0.08509}};
   PlateParameters right{{-0.127, 0.1016, 0.08509}};
   std::vector<double> symmetric_transform{1., 0., 0., 0., 1., 0., 0., 0., 1.};
@@ -59,6 +63,7 @@ struct PlateConfiguration {
 };
 
 struct Configuration {
+  PlateMode plate_mode = PlateMode::Both;
   PlateConfiguration left, right;
   Matrix3 symmetric_transform = wrench_transform::Identity;
   double ankle_gain = 1.;
@@ -129,6 +134,26 @@ public:
                 next.left.ankle_to_origin.begin());
     std::copy_n(parameters.right.ankle_to_origin.begin(), 3,
                 next.right.ankle_to_origin.begin());
+    next.plate_mode = parameters.plate_mode;
+    if (next.plate_mode != PlateMode::Both) {
+      if (!finite_vector(parameters.single_plate_ankle_shift_left, 3))
+        return "Single-plate ankle shift needs three finite metres";
+      const bool left = next.plate_mode == PlateMode::Left;
+      auto &plate = left ? next.left : next.right;
+      // Shift the central ankle origin toward the selected plate. The moment
+      // arm points the opposite way, from the new ankle to the plate origin.
+      for (std::size_t i = 0; i < 3; ++i)
+        plate.ankle_to_origin[i] -=
+            (left ? 1. : -1.) * parameters.single_plate_ankle_shift_left[i];
+
+      const auto &matrix = parameters.same_transformation
+                               ? parameters.symmetric_transform
+                               : (left ? parameters.left.linear_transform
+                                       : parameters.right.linear_transform);
+      if (parameters.matrix_transformation &&
+          (matrix[1] != 0 || matrix[7] != 0 || matrix[2] != 0))
+        return "Single-plate transform mixes unmeasured force or torque components";
+    }
     next.left.linear_transform =
         matrix_from_values(parameters.left.linear_transform);
     next.right.linear_transform =
@@ -159,6 +184,15 @@ public:
       return "Logic has not been configured";
     if (!std::isfinite(time_s) || time_s < 0.)
       return "Invalid read time";
+    if (configuration_.plate_mode != PlateMode::Both) {
+      const auto &plate = configuration_.plate_mode == PlateMode::Left
+                              ? inputs.left : inputs.right;
+      if (!plate.valid || !std::isfinite(plate.wrench.force[0]) ||
+          !std::isfinite(plate.wrench.force[2]) ||
+          !std::isfinite(plate.wrench.torque[0]))
+        return "Selected plate needs valid Fx, Fz and torque about X";
+      return nullptr;
+    }
     if (!inputs.left.valid || !inputs.right.valid ||
         !finite(inputs.left.wrench) || !finite(inputs.right.wrench))
       return "Plate wrench is unavailable or nonfinite";
@@ -222,6 +256,11 @@ public:
     if (!finite(output.wrench)) {
       reset_perturbation();
       return {{}, "Final ankle wrench is nonfinite", capture};
+    }
+    if (configuration_.plate_mode != PlateMode::Both) {
+      output.wrench.force[1] = Unavailable;
+      output.wrench.torque[1] = Unavailable;
+      output.wrench.torque[2] = Unavailable;
     }
     return {output, nullptr, capture};
   }
@@ -311,6 +350,25 @@ private:
   WrenchSample compute_wrench(const Inputs &inputs, double read_time_s) const {
     Wrench left = inputs.left.wrench;
     Wrench right = inputs.right.wrench;
+    if (configuration_.plate_mode != PlateMode::Both) {
+      const bool use_left = configuration_.plate_mode == PlateMode::Left;
+      auto plate = use_left ? left : right;
+      const auto &config = use_left ? configuration_.left : configuration_.right;
+      const auto &matrix = configuration_.matrix_transformation
+          ? (configuration_.same_transformation ? configuration_.symmetric_transform
+                                               : config.linear_transform)
+          : wrench_transform::Identity;
+      const double gain = configuration_.scaling
+          ? (configuration_.same_scaling ? configuration_.ankle_gain : config.gain)
+          : 1.;
+      // Only these terms are identifiable. The selected ankle origin stays on
+      // the pitch axis, and Fy is absent from the reduced moment calculation.
+      const double fx = gain * (matrix[0][0] * plate.force[0] + matrix[0][2] * plate.force[2]);
+      const double fz = gain * (matrix[2][0] * plate.force[0] + matrix[2][2] * plate.force[2]);
+      const double tx = gain * matrix[0][0] * plate.torque[0] +
+                        config.ankle_to_origin[1] * fz;
+      return {{{fx, 0., fz}, {tx, 0., 0.}}, read_time_s, true};
+    }
     if (configuration_.custom_transformation)
       wrench_transform::custom_transformation(left, right, read_time_s);
 

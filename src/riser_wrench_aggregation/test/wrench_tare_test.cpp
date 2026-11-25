@@ -70,4 +70,35 @@ int main() {
   logic.begin_capture(Capture::EmptyTare);
   CHECK(capture(empty, 12.) == CaptureResult::Success);
   CHECK(logic.subject_mass_kg() == 0.);
+
+  for (const auto side : {PlateMode::Left, PlateMode::Right}) {
+    WrenchAggregationLogic single;
+    Parameters config;
+    config.plate_mode = side;
+    CHECK(single.configure(config) == nullptr);
+    const bool left = side == PlateMode::Left;
+    const auto &offset = left ? single.configuration().left.ankle_to_origin
+                              : single.configuration().right.ankle_to_origin;
+    CHECK(offset[0] == 0.);
+    CHECK(single.activate() == nullptr);
+    Inputs inputs;
+    auto &plate = left ? inputs.left : inputs.right;
+    plate = {{{5., Unavailable, 100.}, {2., Unavailable, Unavailable}}, true};
+    auto sample = single.update(inputs, 0.1).output;
+    CHECK(sample.valid && sample.wrench.force[0] == 5.);
+    CHECK(sample.wrench.force[2] == 100.);
+    CHECK(std::abs(sample.wrench.torque[0] - 12.16) < 1e-10);
+    CHECK(std::isnan(sample.wrench.force[1]));
+    CHECK(std::isnan(sample.wrench.torque[1]));
+    CHECK(std::isnan(sample.wrench.torque[2]));
+    plate.wrench.force[0] = Unavailable;
+    CHECK(!single.update(inputs, 0.2).output.valid);
+    plate.wrench.force[0] = 5.;
+    plate.valid = false;
+    CHECK(!single.update(inputs, 0.3).output.valid);
+
+    single.deactivate();
+    config.symmetric_transform[1] = 1.;
+    CHECK(single.configure(config) != nullptr);
+  }
 }

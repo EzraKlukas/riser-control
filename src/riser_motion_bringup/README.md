@@ -1,6 +1,6 @@
 # G5 motor commissioning
 
-Build on riserms against the commissioned stock IgH installation. The real entry point is `ros2 launch riser_bringup control.launch.py backend:=ethercat`. It starts the G5 backend, read-only calibration observer and two feedback broadcasters. No automatic fault reset or motion claim occurs. `riser_motion_bringup bottom_motor.launch.py` runs just the bench hardware and controller manager. Normal simulation continues to use `backend:=mock` or `backend:=gazebo` in riser_bringup.
+Build on riserms against the commissioned stock IgH installation. The real entry point is `ros2 launch riser_bringup control.launch.py backend:=ethercat`. It starts the G5 backend, read-only calibration observer and feedback broadcasters, including ankle-wrench feedback when force-plate acquisition is enabled. No automatic fault reset or motion claim occurs. `riser_motion_bringup bottom_motor.launch.py` runs the bench hardware and controller manager without the calibration observer. Normal simulation continues to use `backend:=mock` or `backend:=gazebo` in riser_bringup.
 
 ```bash
 cd ~/riser-control
@@ -86,3 +86,66 @@ colcon test-result --verbose
 # From the Qt environment, select an unused local test domain
 ROS_DOMAIN_ID=126 python src/riser_motion_bringup/test/mock_console.py
 ```
+
+## EtherCAT force-plate inputs
+
+`force_plates:=true` is the default. The real backend discovers one EK1100 and
+one ELM3604-0002 (product `0x50219349`, revision `0x00130002`) by identity.
+The ELM has its own input domain on the existing IgH master. The G5 axes keep
+their configured absolute ring positions and identity checks. With the bottom
+G5 directly in front of the EK1100 it remains at position 0. The coupler and
+terminal will be found at positions 1 and 2. Use `force_plates:=false` for an
+existing G5-only installation or disconnected-drive check.
+
+For the EK1100 and terminal by themselves, use the input-only launch:
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source ~/riser-control/install/setup.bash
+ros2 launch riser_motion_bringup bottom_motor.launch.py inputs_only:=true
+```
+
+`force_plate_side:=left` selects the left plate by default. Use
+`force_plate_side:=right` to select the right and connect that plate's signals
+in the same order. X1 is torque about X, X2 is Fz, X3 is Fx. X4 is unassigned.
+The channels use 0–10 V DC, IEPE off, no filtering or decimation, and the
+fixed three status/sample PDO pairs on a 1 ms cycle. These settings follow
+[the zero_force_controller reference](https://github.com/EzraKlukas/zero_force_controller/tree/a360174).
+
+`/dynamic_joint_states` includes the selected plate's signed raw PDO counts
+(`x1_raw` through `x3_raw`), packed status words (`x1_status` through
+`x3_status`) and SI interface names shared with Gazebo. The packed word has
+sample count in bits 0–7, error/under-/overrange in bits 8–10, diagnostic
+and invalid TxPDO flags in bits 12–13, and a rolling counter in bits 14–15.
+An incomplete domain, terminal outside OP, stale counter or unusable channel
+status invalidates the wrench. Raw process data and its status remain visible
+in OP while a channel reports a measurement problem.
+
+Set `elm_x{1,2,3}_scale` and `elm_x{1,2,3}_zero` to the measured signed
+SI-per-count slope and zero in counts for the selected plate and acquisition
+chain. The formula is `(counts - zero) * scale`. The inputs must be calibrated
+as wrench components referred to the plate surface centre. The factory
+inverse-sensitivity matrix is for normalized bridge signals and does not
+establish the amplifier-to-ELM conversion or cross-axis accuracy with just
+three channels. By default scale is zero, so the system exports raw samples
+while wrench validity remains false. See the
+[factory calibration record](../riser_bringup/config/force_plate_wrench_calibration.yaml).
+
+The aggregated result uses the existing
+`/ankle_wrench_state_broadcaster/dynamic_joint_states` topic. It carries Fx,
+Fz, Tx, timestamp and validity. The side selection mirrors the ankle-origin
+shift. Real footplate pitch feedback is still needed for empty tare and
+mass measurement. The existing powered balance path also needs verified
+kinematics and its own commissioning.
+
+On 2026-11-25 the EK1100 and ELM3604 reached OP with a 24-byte input-only
+domain and working counter 1/1. In five seconds the ROS raw stream delivered
+5,006 samples per channel and the ankle stream delivered 5,004 messages.
+All three input counters advanced and raw counts ranged over 0–23, 0–4 and
+0–140 for X1–X3. A second run selecting the right plate delivered 5,000 raw
+and 5,000 ankle samples in five seconds. The channels were floating and
+reported diagnostic and frequent underrange flags. Both wrench validity
+streams remained false.
+The bench returned to PREOP and the master was inactive after launch exit.
+Powered plate measurements and the combined G5/EK1100/ELM topology remain
+pending physical verification.

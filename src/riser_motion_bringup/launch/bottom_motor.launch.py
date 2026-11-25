@@ -1,24 +1,24 @@
 """Named rotary G5 axes sharing one master and the commissioned CSV scaling."""
 
 from copy import deepcopy
-from tempfile import NamedTemporaryFile
-import yaml
 from math import tau
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from xml.sax.saxutils import escape
+
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     OpaqueFunction,
-    Shutdown,
     RegisterEventHandler,
+    Shutdown,
 )
 from launch.event_handlers import OnShutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
-
 
 # R88M-K40030L-BS2: 20-bit incremental encoder (Omron G5 lineup/specification).
 # reports/G5_parameter_reference.html: Pn001=0, Pn748=1, Pn749=1.
@@ -48,10 +48,21 @@ def setup(context):
         Path(LaunchConfiguration("axes_file").perform(context)).read_text()
     )
     backend = LaunchConfiguration("drive_backend").perform(context)
+    force_plates = LaunchConfiguration("force_plates").perform(context) == "true"
+    plate_side = LaunchConfiguration("force_plate_side").perform(context)
+    inputs_only = LaunchConfiguration("inputs_only").perform(context) == "true"
+    if inputs_only and (not force_plates or values["commissioning_disabled"] != "1"):
+        raise ValueError(
+            "inputs_only requires force_plates and commissioning_disabled:=1"
+        )
     selection = LaunchConfiguration("enabled_axes").perform(context)
-    enabled = selection.split(",") if selection else profile["enabled"]
+    enabled = (
+        []
+        if inputs_only
+        else (selection.split(",") if selection else profile["enabled"])
+    )
     if (
-        not enabled
+        (not inputs_only and not enabled)
         or len(enabled) != len(set(enabled))
         or not set(enabled) <= {"bottom", "top", "torso", "hip"}
     ):
@@ -62,6 +73,8 @@ def setup(context):
         Path(LaunchConfiguration("controllers_file").perform(context)).read_text()
     )
     manager_params = config["controller_manager"]["ros__parameters"]
+    if force_plates and manager_params["update_rate"] != 1000:
+        raise ValueError("Force-plate acquisition requires a 1000 Hz manager")
     if backend == "real":
         for key, value in {
             "cpu_affinity": 3,
@@ -123,6 +136,46 @@ def setup(context):
         if name not in enabled and axis.get("serial"):
             for key in ("position", "serial", "alias"):
                 values[name + "_motor_" + key] = str(axis[key])
+    if force_plates:
+        plate_states = "torque.x force.z force.x valid x1_raw x2_raw x3_raw x1_status x2_status x3_status"
+        interfaces = "".join(
+            f'<state_interface name="{name}"><param name="initial_value">0</param></state_interface>'
+            for name in plate_states.split()
+        )
+        resources.append(
+            f'<sensor name="{plate_side}_force_plate">{interfaces}</sensor>'
+        )
+        for index in range(1, 4):
+            for key in ("scale", "zero"):
+                name = f"elm_x{index}_{key}"
+                values[name] = str(float(LaunchConfiguration(name).perform(context)))
+
+        manager_params["ankle_wrench"] = {
+            "type": "riser_wrench_aggregation/WrenchAggregationController",
+        }
+        manager_params["ankle_wrench_state_broadcaster"] = deepcopy(
+            manager_params["joint_state_broadcaster"]
+        )
+        ankle_params = config.setdefault("ankle_wrench", {}).setdefault(
+            "ros__parameters", {}
+        )
+        ankle_params.setdefault("foot_pitch_interface", "")
+        ankle_params.setdefault("custom_transformation", False)
+        ankle_params["plate_mode"] = plate_side
+        config["ankle_wrench_state_broadcaster"] = {
+            "ros__parameters": {
+                "joints": ["ankle_wrench"],
+                "interfaces": [
+                    "force.x",
+                    "force.z",
+                    "torque.x",
+                    "sample_time",
+                    "valid",
+                ],
+                "use_urdf_to_filter": False,
+                "use_local_topics": True,
+            }
+        }
     parameters = "".join(
         f'<param name="{key}">{escape(value)}</param>'
         for key, value in values.items()
@@ -201,7 +254,25 @@ def setup(context):
                 output="screen",
             )
         )
-    if (
+    if force_plates:
+        nodes.append(
+            Node(
+                package="controller_manager",
+                executable="spawner",
+                arguments=[
+                    "ankle_wrench",
+                    *(
+                        ["ankle_wrench_state_broadcaster"]
+                        if LaunchConfiguration("feedback").perform(context) == "true"
+                        else []
+                    ),
+                    "--param-file",
+                    config,
+                ],
+                output="screen",
+            )
+        )
+    if controllers and (
         values["commissioning_disabled"] == "0"
         or LaunchConfiguration("load_motion_inactive").perform(context) == "true"
     ):
@@ -262,5 +333,21 @@ def generate_launch_description():
                 / "config/controllers.yaml"
             ),
         )
+    ]
+    args += [
+        DeclareLaunchArgument(
+            "force_plates", default_value="true", choices=["true", "false"]
+        ),
+        DeclareLaunchArgument(
+            "force_plate_side", default_value="left", choices=["left", "right"]
+        ),
+        DeclareLaunchArgument(
+            "inputs_only", default_value="false", choices=["true", "false"]
+        ),
+    ]
+    args += [
+        DeclareLaunchArgument(f"elm_x{i}_{key}", default_value="0.0")
+        for i in range(1, 4)
+        for key in ("scale", "zero")
     ]
     return LaunchDescription(args + [OpaqueFunction(function=setup)])

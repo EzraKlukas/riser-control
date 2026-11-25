@@ -73,6 +73,18 @@ int ecrt_slave_config_dc(ec_slave_config_t *, uint16_t assign, uint32_t cycle,
                          int32_t shift, uint32_t, int32_t) {
   return assign == 0x0300 && cycle == 1000000 && shift == 650000 ? 0 : -1;
 }
+int ecrt_slave_config_pdo_assign_add(ec_slave_config_t *, uint8_t, uint16_t) {
+  return -1;
+}
+int ecrt_slave_config_pdo_assign_clear(ec_slave_config_t *, uint8_t) {
+  return -1;
+}
+int ecrt_slave_config_sdo8(ec_slave_config_t *, uint16_t, uint8_t, uint8_t) {
+  return -1;
+}
+int ecrt_slave_config_sdo16(ec_slave_config_t *, uint16_t, uint8_t, uint16_t) {
+  return -1;
+}
 int ecrt_master_activate(ec_master_t *) { return 0; }
 uint8_t *ecrt_domain_data(const ec_domain_t *d) {
   return const_cast<uint8_t *>(d->bytes.data());

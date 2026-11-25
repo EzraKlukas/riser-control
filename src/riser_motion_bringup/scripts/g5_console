@@ -287,6 +287,11 @@ class Console(W.QWidget):
             for n in list(self.samples)
             if n.endswith("_excluded")
         }
+        self.samples = {
+            name: state
+            for name, state in self.samples.items()
+            if name.endswith("_motor")
+        }
         if set(self.samples) != {
             self.axis.itemText(i) for i in range(self.axis.count())
         }:

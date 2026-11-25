@@ -87,13 +87,28 @@ Its inertial feedback uses acceleration delayed by one physics step. See
 
 ## Ankle wrench
 
-Gazebo bringup activates `ankle_wrench`, followed by
-`ankle_wrench_state_broadcaster`. Other backends do not yet provide force-plate
-states. The provider claims both plates' six wrench components, their
+Gazebo and G5 force-plate bringup activate `ankle_wrench`, followed by
+`ankle_wrench_state_broadcaster`. With `plate_mode: both` (the default),
+the provider claims both plates' six wrench components, their
 `valid` flags, the common read time and footplate pitch. It exports the eight wrench fields and
 `subject_mass_kg` under `ankle_wrench/`.
 The consumer publishes all eight values on
 `/ankle_wrench_state_broadcaster/dynamic_joint_states` for ROS tools and PlotJuggler.
+
+`plate_mode: left` or `right` requires only the selected plate's
+`force.x`, `force.z`, `torque.x` and `valid`. The one-plate ankle origin
+is shifted from the central ankle origin by
+`single_plate_ankle_shift_left` in metres for the left plate and its negative
+for the right. The default is `[0.127, 0, 0]`, on the pitch axis at the
+selected plate's X centre. The moment arm is this new ankle origin to the
+plate origin. The reduced calculation gives `T_x = M_x + arm_y * F_z` using
+the signed measurements in RISER axes. The reduced moment omits the term
+involving unavailable `F_y`. Single-plate processing uses the applicable
+matrix and gain, with matrix terms that mix unavailable components rejected.
+The hardware broadcaster publishes only the three measured/derived wrench
+components. In the chainable state interfaces the remaining fields are NaN.
+Empty tare and mass measurement still require verified footplate pitch.
+[ELM3604 setup and checks](../../riser_motion_bringup/README.md#ethercat-force-plate-inputs)
 It uses local topics to keep these diagnostic values separate from `/joint_states`.
 
 The output origin is the approximate ankle midpoint, at the foot-platform pitch

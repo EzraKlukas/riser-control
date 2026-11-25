@@ -18,6 +18,19 @@ int main() {
   }
   validate_topology(addresses, ring);
   validate_topology(addresses, {ring.front()});
+  const G5Identity coupler{2, 0x044c2c52, 0, 0, 0};
+  const G5Identity elm{2, 0x50219349, 0x00130002, 0, 0};
+  validate_topology({}, {coupler, elm}, {0, 1});
+  validate_topology({{"bottom_motor", 0, 0, 0, true}},
+                    {ring.front(), coupler, elm}, {1, 2});
+  validate_topology({{"bottom_motor", 2, 0, 0, true}},
+                    {coupler, elm, ring.front()}, {0, 1});
+  try {
+    validate_topology({{"bottom_motor", 0, 0, 0, true}},
+                      {coupler, elm, ring.front()}, {0, 1});
+    return 26;
+  } catch (const std::runtime_error &) {
+  }
   for (auto &a : addresses)
     a.enabled = true;
   validate_topology(addresses, ring);

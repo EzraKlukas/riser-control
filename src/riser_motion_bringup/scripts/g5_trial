@@ -115,6 +115,13 @@ def export(path, topics):
         "velocity": "rad_s",
         "torque_nm": "Nm",
         "torque_raw": "permille",
+        "force.x": "N",
+        "force.y": "N",
+        "force.z": "N",
+        "torque.x": "Nm",
+        "torque.y": "Nm",
+        "torque.z": "Nm",
+        "sample_time": "s",
     }
     while reader.has_next():
         topic, data, _ = reader.read_next()
