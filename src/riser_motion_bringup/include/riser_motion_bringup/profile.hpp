@@ -11,22 +11,30 @@ struct Settings {
          max_acceleration = 0;
   double max_period = 0.005;
 };
-inline bool valid(const Settings &s) {
-  const bool shape =
-      s.profile == "ramp" || s.profile == "sine" || s.profile == "triangle";
+inline const char *profile_error(const Settings &s) {
+  if (s.profile != "ramp" && s.profile != "sine" && s.profile != "triangle")
+    return "Unknown profile shape";
+  if (!std::isfinite(s.speed))
+    return "Velocity must be finite";
+  if (!std::isfinite(s.duration) || s.duration <= 0)
+    return "Duration must be finite and positive";
+  if (!std::isfinite(s.ramp) || s.ramp <= 0 || s.ramp * 2 > s.duration)
+    return "Duration must allow two ramps of positive length";
+  if (!std::isfinite(s.max_period) || s.max_period <= 0 || s.max_period >= s.ramp)
+    return "Maximum control period must be positive and shorter than the ramp";
   const double acceleration =
       s.profile == "sine" ? std::abs(s.speed) * 6.283185307179586 / s.duration
       : s.profile == "triangle" ? 2 * std::abs(s.speed) / s.duration
                                 : std::abs(s.speed) / s.ramp;
-  return shape && std::isfinite(s.speed) && std::isfinite(s.duration) &&
-         s.duration > 0 && std::isfinite(s.ramp) && s.ramp > 0 &&
-         s.ramp * 2 <= s.duration && std::isfinite(s.max_travel) &&
-         s.max_travel > 0 && std::isfinite(s.max_acceleration) &&
-         s.max_acceleration > 0 && acceleration <= s.max_acceleration &&
-         std::isfinite(s.max_period) && s.max_period > 0 &&
-         s.max_period < s.ramp &&
-         std::abs(s.speed) * s.duration <= s.max_travel;
+  if (!std::isfinite(s.max_acceleration) || s.max_acceleration <= 0 ||
+      acceleration > s.max_acceleration)
+    return "Acceleration cap exceeded";
+  if (!std::isfinite(s.max_travel) || s.max_travel <= 0 ||
+      std::abs(s.speed) * s.duration > s.max_travel)
+    return "Travel cap exceeded";
+  return nullptr;
 }
+inline bool valid(const Settings &s) { return profile_error(s) == nullptr; }
 // Finite profiles with zero endpoints. Sine is one complete velocity cycle.
 inline double velocity(const Settings &s, double t) {
   if (t <= 0 || t >= s.duration)

@@ -4,6 +4,34 @@ using namespace riser_motion_bringup;
 using namespace std::chrono_literals;
 
 int main() {
+  if (!jog_stamp_error(-5ms, 2, 1).empty() ||
+      !jog_stamp_error(500ms, 2, 1).empty() ||
+      jog_stamp_error(-5ms - 1ns, 2, 1).find("in the future") == std::string::npos ||
+      jog_stamp_error(500ms + 1ns, 2, 1).find("expired") == std::string::npos ||
+      jog_stamp_error(-2ms, 2, 2).find("newer") == std::string::npos)
+    return 7;
+
+  Settings requested{"ramp", 0., 1., .25, .16, .08};
+  for (const double speed : {-.01, -.001, .001, .01}) {
+    requested.speed = speed;
+    if (!jog_limits_error(requested, .02, 10.).empty())
+      return 8;
+  }
+  if (jog_limits_error(requested, .005, 10.).find("Velocity cap") != 0 ||
+      jog_limits_error(requested, .02, .9).find("Duration cap") != 0)
+    return 9;
+  requested.duration = .49;
+  if (jog_limits_error(requested, .02, 10.).find("two ramps") == std::string::npos)
+    return 10;
+  requested.duration = 1.;
+  requested.max_acceleration = .03;
+  if (jog_limits_error(requested, .02, 10.).find("Acceleration cap") != 0)
+    return 11;
+  requested.max_acceleration = .08;
+  requested.max_travel = .005;
+  if (jog_limits_error(requested, .02, 10.).find("Travel cap") != 0)
+    return 12;
+
   Settings caps;
   caps.ramp = .25;
   caps.max_travel = .1;

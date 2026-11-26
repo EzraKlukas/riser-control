@@ -33,6 +33,16 @@ ros2 control set_controller_state motor_profile inactive
 
 Each active controller owns one velocity interface. A jog requires fresh operation-enabled feedback, signed carriage velocity in m/s, duration and sufficient ramp/travel budget. The default ramp is 0.25 s, the maximum duration is 10 s, and the speed-times-duration check also applies. The 0.160 m budget is checked for each jog and for calibration travel while seeking the second switch. A displacement limit for the entire hardware session is pending. The host rejects requests older than 0.5 s, checks its steady-clock deadline every cycle and stops a jog after 0.6 s without its matching heartbeat. Keep laptop and host clocks synchronized. A limit cancels motion into that switch. A fresh jog away requires healthy feedback. Cancel and expiry command zero velocity. Deactivation releases the claim and requests drive shutdown. Disconnecting the laptop stops the jog by lease expiry while the active controller still owns the servo. A latched communication/drive fault inhibits re-enabling until the operator resolves it and explicitly restarts the hardware lifecycle.
 
+If a jog is rejected after activation, read the host's response in the console
+output or `g5_jog`. A negative signed age means the stamp is ahead of the host
+ROS clock at receipt. The host allows up to 5 ms of future skew.
+An age above 500 ms can come from clock skew or request
+delay. On Linux, run `timedatectl status` on both machines and verify they use
+the intended ROS clock (`use_sim_time` is normally false on hardware). Limit
+rejections include the values used by the configured controller. Compare those
+with `ros2 param dump /motor_profile` (or the selected axis profile). An edit
+while inactive takes effect when the controller is configured again.
+
 ## Laptop console and data
 
 Build and source the updated Jazzy motion package on both the robot host and laptop for the metre-based jog service. The GUI uses the operator's existing SSH configuration for host-only commands, and Jazzy DDS for state, lifecycle and jog. Complete the management-network acceptance in the commissioning checklist first. The following installs Qt in a laptop virtual environment, preserving the system ROS Python packages:

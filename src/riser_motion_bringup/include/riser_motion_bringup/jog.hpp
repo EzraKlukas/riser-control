@@ -3,9 +3,46 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <sstream>
 
 namespace riser_motion_bringup {
 using JogClock = std::chrono::steady_clock;
+inline constexpr auto kJogRequestLifetime = std::chrono::milliseconds(500);
+inline constexpr auto kJogFutureSkew = std::chrono::milliseconds(5);
+
+inline std::string jog_stamp_error(std::chrono::nanoseconds age, int64_t stamp,
+                                   int64_t latest_stamp) {
+  if (age < -kJogFutureSkew || age > kJogRequestLifetime) {
+    const auto age_ms = std::chrono::duration<double, std::milli>(age).count();
+    return std::string(age.count() < 0 ? "Jog stamp is in the future"
+                                       : "Jog stamp expired") +
+           " (host ROS time minus client stamp is " + std::to_string(age_ms) +
+           " ms, allowed " + std::to_string(-kJogFutureSkew.count()) + " to " +
+           std::to_string(kJogRequestLifetime.count()) +
+           " ms). Check host and client clocks.";
+  }
+  if (stamp <= latest_stamp)
+    return "Jog stamp must be newer than the last accepted jog or cancel";
+  return {};
+}
+
+inline std::string jog_limits_error(const Settings &s, double speed_cap,
+                                    double duration_cap) {
+  const char *reason = profile_error(s);
+  if (std::isfinite(s.speed) && std::abs(s.speed) > speed_cap)
+    reason = "Velocity cap exceeded";
+  else if (std::isfinite(s.duration) && s.duration > duration_cap)
+    reason = "Duration cap exceeded";
+  if (!reason)
+    return {};
+  std::ostringstream message;
+  message << reason << " (requested " << s.speed << " m/s for " << s.duration
+          << " s. Configured limits are " << speed_cap << " m/s, " << duration_cap
+          << " s, " << s.ramp << " s per ramp, " << s.max_acceleration
+          << " m/s^2, " << s.max_travel << " m)";
+  return message.str();
+}
+
 struct JogRequest {
   uint64_t id = 0, activation = 0;
   int64_t token = 0;

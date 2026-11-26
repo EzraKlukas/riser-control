@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <builtin_interfaces/msg/time.hpp>
 #include <chrono>
@@ -110,20 +111,25 @@ public:
             request.token =
                 static_cast<int64_t>(input->stamp.sec) * 1000000000 +
                 input->stamp.nanosec;
-            const double age = get_node()->now().seconds() -
-                               (input->stamp.sec + input->stamp.nanosec * 1e-9);
+            const int64_t now_ns = get_node()->now().nanoseconds();
+            const auto age = std::chrono::nanoseconds(now_ns - request.token);
             auto settings = settings_;
             settings.speed = input->velocity_m_s;
             settings.duration = input->duration_s;
             request.cancel = input->cancel;
-            if (!request.cancel &&
-                (input->stamp.nanosec >= 1000000000 ||
-                 request.token <= latest_stamp_ || age < 0 || age > 0.5 ||
-                 !valid(settings) || std::abs(settings.speed) > speed_cap_ ||
-                 settings.duration > duration_cap_)) {
-              output->message = "Expired timestamp or speed, duration, ramp or "
-                                "travel cap exceeded";
-              return;
+            if (!request.cancel) {
+              if (input->stamp.nanosec >= 1000000000) {
+                output->message =
+                    "Malformed jog stamp (nanosec must be below 1000000000)";
+                return;
+              }
+              output->message =
+                  jog_stamp_error(age, request.token, latest_stamp_);
+              if (output->message.empty())
+                output->message =
+                    jog_limits_error(settings, speed_cap_, duration_cap_);
+              if (!output->message.empty())
+                return;
             }
             request.id = ++sequence_;
             if (!request.cancel) {
@@ -136,11 +142,12 @@ public:
             }
             request.velocity = settings.speed;
             request.duration = settings.duration;
-            latest_stamp_ = request.cancel ? get_node()->now().nanoseconds()
+            latest_stamp_ = request.cancel ? std::max(latest_stamp_, now_ns)
                                            : request.token;
             request.expires = JogClock::now() +
                               std::chrono::duration_cast<JogClock::duration>(
-                                  std::chrono::duration<double>(0.5 - age));
+                                  kJogRequestLifetime -
+                                  std::max(age, std::chrono::nanoseconds::zero()));
             // Keep the slot occupied until the realtime loop processes cancel.
             if (request.cancel)
               occupied_.store(request.id);
