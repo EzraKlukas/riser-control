@@ -66,6 +66,8 @@ def record(name, topics):
                 str(path),
                 "--topics",
                 *topics,
+                "--custom-data",
+                "riser_motor_units=m",
             ]
         )
         try:
@@ -91,10 +93,11 @@ def record(name, topics):
             CONTROL.unlink(missing_ok=True)
 
 
-def export(path, topics):
+def export(path, topics, motor_units=None):
     from collections import defaultdict
 
     import numpy as np
+    import yaml
     from control_msgs.msg import DynamicJointState
     from rclpy.serialization import deserialize_message
     from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions
@@ -109,6 +112,12 @@ def export(path, topics):
     selected = set(topics) or available
     if not selected or selected - available:
         raise ValueError("Select recorded DynamicJointState topics for NPZ export")
+    metadata = yaml.safe_load((path / "metadata.yaml").read_text())
+    custom_data = metadata["rosbag2_bagfile_information"].get("custom_data") or {}
+    recorded_units = custom_data.get("riser_motor_units")
+    if recorded_units and motor_units and recorded_units != motor_units:
+        raise ValueError("Requested motor units conflict with the recording metadata")
+    motor_units = recorded_units or motor_units
     samples = defaultdict(list)
     for_unit = {
         "position": "rad",
@@ -125,12 +134,17 @@ def export(path, topics):
         for name, state in zip(msg.joint_names, msg.interface_values):
             for key, value in zip(state.interface_names, state.values):
                 prefix = f"{topic.strip('/')}/{name}/{key}"
+                unit = for_unit.get(key, "unitless")
+                if name.endswith("_motor") and key in ("position", "velocity"):
+                    if motor_units not in ("m", "rad"):
+                        raise ValueError(
+                            "Specify --motor-units m or rad for unmarked G5 bags"
+                        )
+                    unit = motor_units if key == "position" else motor_units + "_s"
+                elif key.endswith(("_rad", "_m")):
+                    unit = key.rsplit("_", 1)[1]
                 samples[prefix + "/stamp_ns"].append(stamp)
-                samples[
-                    prefix
-                    + "/"
-                    + for_unit.get(key, "rad" if key.endswith("_rad") else "unitless")
-                ].append(value)
+                samples[prefix + "/" + unit].append(value)
     if not samples:
         raise ValueError("No telemetry samples")
     np.savez_compressed(path.with_suffix(".npz"), **samples)
@@ -154,7 +168,12 @@ def main():
     )
     parser.add_argument("name", nargs="?", default="")
     parser.add_argument("topics", nargs="*")
-    a = parser.parse_args()
+    parser.add_argument(
+        "--motor-units",
+        choices=["m", "rad"],
+        help="Motor units when exporting a bag without unit metadata",
+    )
+    a = parser.parse_intermixed_args()
     ROOT.mkdir(parents=True, exist_ok=True)
     if a.action == "start":
         name = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ") + (
@@ -209,7 +228,7 @@ def main():
     elif a.action == "verify":
         verify(trial(a.name))
     else:
-        export(trial(a.name), a.topics)
+        export(trial(a.name), a.topics, a.motor_units)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,8 @@
 #include <riser_motion_bringup/profile.hpp>
 int main() {
   using namespace riser_motion_bringup;
-  Settings s;
+  const Settings settings{"ramp", .02, 4, 1, .20, .08};
+  Settings s = settings;
   if (!valid(s) || velocity(s, 0) != 0 || velocity(s, 4) != 0 ||
       velocity(s, 2) != s.speed)
     return 1;
@@ -20,15 +21,15 @@ int main() {
   s.max_travel = 0.01;
   if (valid(s))
     return 6;
-  s = Settings{};
+  s = settings;
   s.max_acceleration = 0.001;
   if (valid(s))
     return 7;
-  s = Settings{};
+  s = settings;
   s.profile = "triangle";
   if (!valid(s) || velocity(s, 2) != s.speed)
     return 8;
-  s = Settings{};
+  s = settings;
   s.profile = "sine";
   if (!p.start(s, 0))
     return 9;
@@ -36,7 +37,7 @@ int main() {
     return 10;
   if (p.update(.001, 0, 0, true) != 0)
     return 11;
-  s = Settings{};
+  s = settings;
   if (!p.start(s, 0))
     return 12;
   for (int i = 0; i < 4001; ++i)

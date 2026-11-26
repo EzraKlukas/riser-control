@@ -3,10 +3,12 @@
 #include <optional>
 #include <string>
 namespace riser_motion_bringup {
+constexpr double kSpeedToleranceMps = 0.000016; // approximately 0.01 shaft rad/s
+
 struct Settings {
   std::string profile = "ramp";
-  double speed = 10.0, duration = 5, ramp = 1, max_travel = 30.0,
-         max_acceleration = 50.0;
+  double speed = 0, duration = 0, ramp = 0, max_travel = 0,
+         max_acceleration = 0;
   double max_period = 0.005;
 };
 inline bool valid(const Settings &s) {
@@ -62,7 +64,8 @@ public:
         !std::isfinite(position) || !std::isfinite(measured_velocity) ||
         std::abs(position - origin_) >= settings_.max_travel ||
         path_ >= settings_.max_travel ||
-        std::abs(measured_velocity) > std::abs(settings_.speed) * 1.5 + 0.01) {
+        std::abs(measured_velocity) >
+            std::abs(settings_.speed) * 1.5 + kSpeedToleranceMps) {
       stopped_ = true;
       return 0;
     }

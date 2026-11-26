@@ -18,6 +18,7 @@ import xacro
 
 def setup(context):
     backend = LaunchConfiguration("backend").perform(context)
+    calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
     if backend == "ethercat":
         launch = (
             Path(get_package_share_directory("riser_motion_bringup"))
@@ -29,6 +30,7 @@ def setup(context):
                 launch_arguments={
                     "drive_backend": "real",
                     "controllers_file": LaunchConfiguration("g5_controllers_file"),
+                    **({"load_motion_inactive": "true"} if calibrate else {}),
                 }.items(),
             ),
             Node(
@@ -36,14 +38,11 @@ def setup(context):
             ),
         ]
     mode = LaunchConfiguration("command_mode").perform(context)
-    calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
     human = LaunchConfiguration("human").perform(context) == "true"
     if human and backend != "gazebo":
         raise ValueError("The simulated participant requires backend:=gazebo")
-    if calibrate and (backend != "gazebo" or mode != "actuator_position"):
-        raise ValueError(
-            "Calibration requires backend:=gazebo command_mode:=actuator_position"
-        )
+    if calibrate:
+        raise ValueError("The motor calibration controller requires backend:=ethercat")
     if mode.startswith("actuator_") and backend != "gazebo":
         raise ValueError("Actuator command modes currently require the Gazebo backend")
     share = Path(get_package_share_directory("riser_bringup"))
@@ -147,9 +146,7 @@ def setup(context):
             )
         )
     controller_mode = mode.removeprefix("angular_")
-    chosen = (
-        "calibration_controller" if calibrate else f"riser_{controller_mode}_controller"
-    )
+    chosen = f"riser_{controller_mode}_controller"
     # Load the ordinary broadcaster before controller-exported states exist,
     # then activate the wrench provider before its dedicated consumer.
     names = ["joint_state_broadcaster", chosen]

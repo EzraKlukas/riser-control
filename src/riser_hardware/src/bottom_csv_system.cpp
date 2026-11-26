@@ -194,9 +194,9 @@ public:
   on_configure(const rclcpp_lifecycle::State &) override {
     release();
     try {
-      position_scale_ = number("position_units_per_rad");
-      velocity_scale_ = number("velocity_units_per_rad_s");
-      speed_limit_ = number("max_velocity_rad_s");
+      position_scale_ = number("position_units_per_m");
+      velocity_scale_ = number("velocity_units_per_m_s");
+      speed_limit_ = number("max_velocity_m_s");
       cycle_ns_ = integer("cycle_ns");
       const auto shift = info_.hardware_parameters.count("sync0_shift_ns")
                              ? integer("sync0_shift_ns")

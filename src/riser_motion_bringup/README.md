@@ -15,7 +15,7 @@ source install/setup.bash
 
 ## Profiles and jogs
 
-`config/axes.yaml` defines the configured axes, enabled names, absolute ring positions, aliases, expected serials and rated motor torques. The enabled list generates both hardware resources and controller bindings. An excluded, physically present drive needs its own commissioned identity. One bottom drive at ring zero is the bench exception for an unknown serial. The multi-drive profile requires distinct commissioned serials and the same verified motor-unit scaling. Collect that evidence for the other three axes before adding them. Edit the profile with the hardware unconfigured and relaunch the manager to apply its resource list. A launch override such as `enabled_axes:=bottom,top` selects a subset. `axes_file:=/absolute/path` selects a commissioned profile.
+`config/axes.yaml` defines the configured axes, enabled names, absolute ring positions, aliases, expected serials and rated motor torques. It also supplies the carriage pitch (0.010 m/rev), the commissioning limits (0.020 m/s, 0.160 m travel, 0.08 m/s²), and the 0.001 m/s calibration speed. Launch passes the shared limits to the G5 consumers. The enabled list generates both hardware resources and controller bindings. An excluded, physically present drive needs its own commissioned identity. One bottom drive at ring zero is the bench exception for an unknown serial. The multi-drive profile requires distinct commissioned serials and the same verified motor-unit scaling. Collect that evidence for the other three axes before adding them. Edit the profile with the hardware unconfigured and relaunch the manager to apply its resource list. A launch override such as `enabled_axes:=bottom,top` selects a subset. `axes_file:=/absolute/path` selects a commissioned profile.
 
 The real default sends a zero controlword and zero target. `commissioning_disabled:=0` makes velocity claims possible and loads each motion controller inactive. **Activation requests servo enable and can release the brake, even before the first jog.** Use the powered setting only after completing the connected checklist. The real manager defaults to the host commissioning settings of FIFO 80, CPU 3, memory locking and two allocator arenas. A supplied controller file can override those manager settings.
 
@@ -31,11 +31,11 @@ ros2 run riser_motion_bringup g5_jog --axis bottom --cancel
 ros2 control set_controller_state motor_profile inactive
 ```
 
-Each active controller owns one velocity interface. A jog requires fresh operation-enabled feedback, signed shaft velocity, duration and sufficient ramp/travel budget. Default launch bounds are 0.1047197551 rad/s, 8 s, 0.25 s ramp, 0.45 rad/s² and 0.05 rad travel. These are bench configuration values. The host rejects requests older than 0.5 s, checks its steady-clock deadline every cycle and stops a jog after 0.3 s without its matching heartbeat. Keep laptop and host clocks synchronized. A limit cancels motion into that switch. A fresh jog away requires healthy feedback. Cancel and expiry command zero velocity. Deactivation releases the claim and requests drive shutdown. Disconnecting the laptop stops the jog by lease expiry while the active controller still owns the servo. A latched communication/drive fault inhibits re-enabling until the operator resolves it and explicitly restarts the hardware lifecycle.
+Each active controller owns one velocity interface. A jog requires fresh operation-enabled feedback, signed carriage velocity in m/s, duration and sufficient ramp/travel budget. The default ramp is 0.25 s, the maximum duration is 10 s, and the speed-times-duration check also applies. The 0.160 m budget is checked for each jog and for calibration travel while seeking the second switch. A displacement limit for the entire hardware session is pending. The host rejects requests older than 0.5 s, checks its steady-clock deadline every cycle and stops a jog after 0.6 s without its matching heartbeat. Keep laptop and host clocks synchronized. A limit cancels motion into that switch. A fresh jog away requires healthy feedback. Cancel and expiry command zero velocity. Deactivation releases the claim and requests drive shutdown. Disconnecting the laptop stops the jog by lease expiry while the active controller still owns the servo. A latched communication/drive fault inhibits re-enabling until the operator resolves it and explicitly restarts the hardware lifecycle.
 
 ## Laptop console and data
 
-Build the Jazzy motion package on the laptop for the generated service type. The GUI uses the operator's existing SSH configuration for host-only commands, and Jazzy DDS for state, lifecycle and jog. Complete the management-network acceptance in the commissioning checklist first. The following installs Qt in a laptop virtual environment, preserving the system ROS Python packages:
+Build and source the updated Jazzy motion package on both the robot host and laptop for the metre-based jog service. The GUI uses the operator's existing SSH configuration for host-only commands, and Jazzy DDS for state, lifecycle and jog. Complete the management-network acceptance in the commissioning checklist first. The following installs Qt in a laptop virtual environment, preserving the system ROS Python packages:
 
 ```bash
 cd ~/riser-control
@@ -49,11 +49,11 @@ export RISER_SSH=riserms       # use the tested laptop SSH alias or user@host
 ros2 run riser_motion_bringup g5_console --ssh-host "$RISER_SSH"
 ```
 
-**Motion** shows shaft radians, rad/s, torque in N·m and raw per mille, active-high reverse/forward limits, brake indications, CiA words, host fault and calibration angles in radians. During a stale interval the last received values remain labelled Stale. Use the read-only Upload SDO action with explicit index, subindex and datatype. Its host process checks identity and reports hex, mailbox abort or timeout. With the graph stopped, the console defaults to the dedicated single bottom-drive bench for readback and explicit fault clear.
+**Motion** shows carriage position in metres, velocity in m/s, torque in N·m and raw per mille, active-high reverse/forward limits, brake indications, CiA words, host fault and calibration angles in radians. During a stale interval the last received values remain labelled Stale. Use the read-only Upload SDO action with explicit index, subindex and datatype. Its host process checks identity and reports hex, mailbox abort or timeout. With the graph stopped, the console defaults to the dedicated single bottom-drive bench for readback and explicit fault clear.
 
-**Data** starts a detached recorder on riserms with selected absolute topic names at their original rates. Record `/dynamic_joint_states` for the 1 kHz drive sequence, `/g5_plot/dynamic_joint_states` for the 25 Hz stream, and optionally `/g5_calibration/state`. Pause and resume use rosbag2 services. Stop sends SIGINT, waits for finalization, reads the bag back and reports counts, reception rates and maximum gaps. The trial log includes rosbag2 transport loss reports. Dated UTC trials live under `~/riser-control/data/`. Descriptions accept letters, digits, underscores and hyphens. List finalized trials, select one and export DynamicJointState topics to a sibling NPZ file. Each named channel has source nanoseconds and unit-labelled values. Status/bit fields are numeric. Transfer the selected trial using the displayed scp command, or append `.npz` to the remote trial path to copy the export.
+**Data** starts a detached recorder on riserms with selected absolute topic names at their original rates. Record `/dynamic_joint_states` for the 1 kHz drive sequence, `/g5_plot/dynamic_joint_states` for the 25 Hz stream, and optionally `/g5_calibration/state`. Pause and resume use rosbag2 services. Stop sends SIGINT, waits for finalization, reads the bag back and reports counts, reception rates and maximum gaps. The trial log includes rosbag2 transport loss reports. Dated UTC trials live under `~/riser-control/data/`. Descriptions accept letters, digits, underscores and hyphens. List finalized trials, select one and export DynamicJointState topics to a sibling NPZ file. Each named channel has source nanoseconds and unit-labelled values. The recorder tags new bags with motor units in the metadata. For an unmarked bag, use `g5_trial export TRIAL --motor-units rad` for historical shaft data or `--motor-units m` for metre data recorded separately. Status/bit fields are numeric. Transfer the selected trial using the displayed scp command, or append `.npz` to the remote trial path to copy the export.
 
-Live PlotJuggler uses the laptop's live ROS domain. Accept the streaming prompt and confirm the preselected 25 Hz topic in the ROS topic dialog. Drag the desired feedback channels into the plot. For historical plots, select topics and open the transferred bag in a separate window. The reader filters a temporary MCAP offline and launches PlotJuggler in a different localhost domain. Bag playback publishes no messages to the live graph. The laptop needs PlotJuggler with the ROS 2 bag and streaming plugins.
+Live PlotJuggler uses the laptop's live ROS domain. Accept the streaming prompt and confirm the preselected 25 Hz topic in the ROS topic dialog. Drag the desired feedback channels into the plot. Live carriage position and velocity are in m and m/s. Historical bag plots use the values as recorded. For historical plots, select topics and open the transferred bag in a separate window. The reader filters a temporary MCAP offline and launches PlotJuggler in a different localhost domain. Bag playback publishes no messages to the live graph. The laptop needs PlotJuggler with the ROS 2 bag and streaming plugins.
 
 **System** polls controller-manager services, node discovery and the selected typed parameter. CLI actions and output are copyable. Use load/configure/activate/deactivate/unload explicitly. Configuration changes take effect on controller reconfiguration, and the GUI honours parameter descriptors.
 
@@ -63,20 +63,32 @@ For maintenance, deactivate command owners and complete the ordered PREOP shutdo
 
 ## Calibration and balance
 
-The shared calibration controller discovers enabled `*_actuator` resources
-from the robot description and uses `position` commands and feedback in
-metres, plus active-high `limit_switch_lower` and `limit_switch_upper`.
-Gazebo provides this contract. To expose it on G5 hardware, commission the
-signed metres per shaft radian and the actuator zero, then implement and
-verify a bounded linear position adapter over CSV with correct endpoint
-polarity, stale feedback handling and exclusive command ownership. The
-current G5 launch exposes shaft velocity and uses the passive procedure below.
+The C++ `calibration_controller` claims the enabled `*_motor/velocity` interfaces
+and reads carriage position, velocity, ready, feedback validity, and the two
+directional switches. The G5 bench launch loads it inactive with the motion
+profiles when `commissioning_disabled:=0` or `load_motion_inactive:=true`.
+The full EtherCAT launch also accepts `calibrate:=true` to load it inactive
+with the default drive inhibit. Use an explicit controller switch after
+releasing any conflicting velocity claims.
 
-For a bench-only launch, start the passive observer explicitly with `ros2 run riser_bringup g5_calibration.py`. The real full launch includes it. Capture the stationary negative and positive switch positions and the independently established flat/vertical/centred zero with the Motion buttons. Each capture requires fresh healthy feedback and the corresponding switch combination. No calibration service commands a motor. The observer exports `/g5_calibration/state` and protected `result.<axis>_motor.{zero,negative_travel,positive_travel,units,valid}` parameters. A missing/stale/faulted axis invalidates its session references.
+With healthy operation-enabled feedback, calibration seeks the reverse switch,
+then the forward switch, and commands return to their measured midpoint.
+Each asserted switch sample captures an endpoint, including early manual
+assertions. The controller writes zero on each transition before moving in
+the opposite direction on the next update. It reports
+`result.<axis>_motor.{negative_travel_m,positive_travel_m,valid}`.
 
-The existing powered Gazebo procedure drives **position targets in metres**, finds both switches, and commands home at a quarter of bottom stroke or half of the other strokes. Physical G5 CSV uses **motor-shaft radians**. Verify the signed metres per shaft radian, which physical switch defines each endpoint, and how the operator measures flat or vertical before authorizing automatic travel. The observer accepts a startup parameter such as `bottom_motor.metres_per_rad` only from verified commissioning data. Zero leaves the angle unavailable. Calibrated shaft displacement passes through the existing CAD branch and neutral offset for pitch. ML requires both calibrated slides and the documented height projection. No encoder calibration survives a feedback-session loss.
+For a bench-only launch, start the passive observer explicitly with
+`ros2 run riser_bringup g5_calibration.py`. The full EtherCAT launch includes it.
+The Motion **Capture** buttons record stationary negative and positive switch
+positions and an independently established flat, vertical or centred zero.
+The observer exports `/g5_calibration/state` and protected
+`result.<axis>_motor.{zero,negative_travel,positive_travel,units,valid}`
+parameters in metres. It uses measured carriage displacement in the CAD
+mapping. The derived pitch and ML angles are in radians. A missing, stale or
+faulted axis invalidates its session references.
 
-The inverted-pendulum controller's `mode` is `backboard`. It claims just backboard velocity and uses measured backboard state plus the ankle wrench provider. The existing equation produces only backboard acceleration and rate. Requests for `footplate` or `ml` fail configuration with a reason. Bottom-only shaft velocity cannot implement a footplate balance law without its specified equation and an identified transmission.
+The inverted-pendulum controller's `mode` is `backboard`. It claims just backboard velocity and uses measured backboard state plus the ankle wrench provider. The existing equation produces only backboard acceleration and rate. Requests for `footplate` or `ml` fail configuration with a reason. Bottom-only carriage velocity cannot implement a footplate balance law without its specified equation and an identified transmission.
 
 ## Disconnected checks
 

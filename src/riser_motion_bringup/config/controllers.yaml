@@ -11,11 +11,10 @@ motor_profile:
     joint: bottom_motor
     profile: ramp
     # Zero target for the first servo-enabled test after bus qualification.
-    speed_rad_s: 0.0
+    speed_m_s: 0.0
     duration_s: 8.0
     ramp_s: 0.25
-    max_travel_rad: 20.0
-    max_acceleration_rad_s2: 100.0
+    max_duration_s: 10.0
     max_period_s: 0.005
 joint_state_broadcaster:
   ros__parameters: {}

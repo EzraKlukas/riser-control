@@ -299,9 +299,9 @@ ros2 launch riser_motion_bringup bottom_motor.launch.py --show-args
 ```
 
 The archived Sysmac snapshot uses 1:1 gearing and semi-closed motor
-feedback. Position and velocity use the 20-bit encoder scale
-`1048576 / (2*pi)` in motor-shaft rad and rad/s, with no software sign
-inversion. Raw signed values and the archived RxPDO `0x1600` and TxPDO
+feedback. Position and velocity use the 20-bit encoder and the carriage
+pitch in `axes.yaml` to report m and m/s. Raw signed values and the archived
+RxPDO `0x1600` and TxPDO
 `0x1A00` mappings are preserved. Output remains zero through configure,
 activation, every disabled PDO send, deactivation and shutdown.
 Both command-switch phases reject a velocity claim in disabled mode.
@@ -443,7 +443,6 @@ PY
 ros2 launch riser_motion_bringup bottom_motor.launch.py \
   product_code:=0x00000004 commissioning_disabled:=1 sync0_shift_ns:=650000 \
   controllers_file:="$RUN/controllers.yaml" \
-  max_velocity_rad_s:=0.1047197551 max_travel_rad:=0.05 \
   2>&1 | tee "$RUN/launch.log"
 ```
 

@@ -11,6 +11,15 @@ int main(int argc, char **argv) {
   if (controller.init(params) != controller_interface::return_type::OK)
     return 1;
   const rclcpp_lifecycle::State state;
+  if (controller.on_configure(state) != Callback::ERROR)
+    return 2;
+  controller.get_node()->set_parameters({
+      rclcpp::Parameter("speed_m_s", .01),
+      rclcpp::Parameter("max_velocity_m_s", .02),
+      rclcpp::Parameter("max_travel_m", .16),
+      rclcpp::Parameter("max_acceleration_m_s2", .08),
+      rclcpp::Parameter("max_duration_s", 10.),
+  });
   if (controller.on_configure(state) != Callback::SUCCESS)
     return 2;
   double command = NAN, position = 0, velocity = 0, ready = 1;

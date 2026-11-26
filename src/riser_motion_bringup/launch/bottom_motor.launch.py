@@ -3,7 +3,7 @@
 from copy import deepcopy
 from tempfile import NamedTemporaryFile
 import yaml
-from math import tau
+from math import isfinite
 from pathlib import Path
 from xml.sax.saxutils import escape
 from ament_index_python.packages import get_package_share_directory
@@ -24,7 +24,6 @@ from launch_ros.parameter_descriptions import ParameterValue
 # reports/G5_parameter_reference.html: Pn001=0, Pn748=1, Pn749=1.
 # Motor feedback + 1:1 electronic gear => one command unit per encoder count.
 MOTOR_ENCODER_COUNTS_PER_REV = 1 << 20
-COMMAND_UNITS_PER_MOTOR_RAD = MOTOR_ENCODER_COUNTS_PER_REV / tau
 
 
 STATES = "position velocity ready reverse_limit forward_limit digital_inputs feedback_valid statusword controlword operating_mode fault_code torque_raw torque_nm brake_release_request brake_output_feedback physical_brake discovered host_fault"
@@ -36,16 +35,33 @@ def setup(context):
         "alias",
         "position",
         "product_code",
-        "position_units_per_rad",
-        "velocity_units_per_rad_s",
-        "max_velocity_rad_s",
-        "max_travel_rad",
         "sync0_shift_ns",
         "commissioning_disabled",
     ]
     values = {key: LaunchConfiguration(key).perform(context) for key in keys}
     profile = yaml.safe_load(
         Path(LaunchConfiguration("axes_file").perform(context)).read_text()
+    )
+    speed_cap = float(profile["max_velocity_m_s"])
+    travel_cap = float(profile["max_travel_m"])
+    acceleration_cap = float(profile["max_acceleration_m_s2"])
+    calibration_speed = float(profile["calibration_speed_m_s"])
+    metres_per_revolution = float(profile["metres_per_revolution"])
+    limits = (
+        speed_cap,
+        travel_cap,
+        acceleration_cap,
+        calibration_speed,
+        metres_per_revolution,
+    )
+    if not all(isfinite(v) and v > 0 for v in limits) or calibration_speed > speed_cap:
+        raise ValueError("Invalid G5 scaling or commissioning limits")
+    scale = MOTOR_ENCODER_COUNTS_PER_REV / metres_per_revolution
+    values.update(
+        position_units_per_m=str(scale),
+        velocity_units_per_m_s=str(scale),
+        max_velocity_m_s=str(speed_cap),
+        max_travel_m=str(travel_cap),
     )
     backend = LaunchConfiguration("drive_backend").perform(context)
     selection = LaunchConfiguration("enabled_axes").perform(context)
@@ -71,7 +87,17 @@ def setup(context):
             manager_params.setdefault(key, value)
     template = config.pop("motor_profile")
     controller_type = manager_params.pop("motor_profile")
-    links, joints, resources, controllers = [], [], [], []
+    manager_params["calibration_controller"] = {
+        "type": "riser_calibration/CalibrationController"
+    }
+    config["calibration_controller"] = {
+        "ros__parameters": dict(
+            speed_m_s=calibration_speed,
+            max_velocity_m_s=speed_cap,
+            max_travel_m=travel_cap,
+        )
+    }
+    links, joints, resources, controllers = [], [], [], ["calibration_controller"]
     states = STATES.split()
     for name in enabled:
         axis = dict(profile["axes"][name])
@@ -83,9 +109,12 @@ def setup(context):
             if backend == "real" and value is None:
                 raise ValueError(f"Missing commissioned {name} {key}")
             values[joint + "_" + key] = str(value)
-        links.append(f'<link name="{name}_shaft"/>')
+        links.append(f'<link name="{name}_carriage"/>')
+        # Absolute encoder range for URDF. The commissioning budget is relative.
         joints.append(
-            f'<joint name="{joint}" type="continuous"><parent link="base"/><child link="{name}_shaft"/><axis xyz="0 0 1"/></joint>'
+            f'<joint name="{joint}" type="prismatic"><parent link="base"/><child link="{name}_carriage"/>'
+            f'<axis xyz="0 0 1"/><limit lower="{-(2**31) / scale}" upper="{(2**31 - 1) / scale}" '
+            f'velocity="{speed_cap}" effort="0"/></joint>'
         )
         initial = {
             "ready": 2,
@@ -110,8 +139,9 @@ def setup(context):
         config[controller]["ros__parameters"].setdefault("jog_mode", True)
         config[controller]["ros__parameters"].update(
             joint=joint,
-            max_velocity_rad_s=float(values["max_velocity_rad_s"]),
-            max_travel_rad=float(values["max_travel_rad"]),
+            max_velocity_m_s=speed_cap,
+            max_travel_m=travel_cap,
+            max_acceleration_m_s2=acceleration_cap,
         )
     if not set(profile["axes"]) <= {"bottom", "top", "torso", "hip"}:
         raise ValueError("Unknown configured axis")
@@ -245,15 +275,7 @@ def generate_launch_description():
             "commissioning_disabled", default_value="1", choices=["0", "1"]
         )
     ]
-    args += [
-        DeclareLaunchArgument(key, default_value=str(COMMAND_UNITS_PER_MOTOR_RAD))
-        for key in ["position_units_per_rad", "velocity_units_per_rad_s"]
-    ]
     args += [DeclareLaunchArgument("product_code", default_value="0x00000004")]
-    args += [
-        DeclareLaunchArgument("max_velocity_rad_s", default_value="100.0"),
-        DeclareLaunchArgument("max_travel_rad", default_value="30.0"),
-    ]
     args += [
         DeclareLaunchArgument(
             "controllers_file",

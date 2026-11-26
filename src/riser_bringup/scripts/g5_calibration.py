@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Passive shaft calibration. The operator presents each stationary reference."""
+"""Passive carriage calibration. The operator presents each stationary reference."""
 
 import json
 import math
@@ -11,7 +11,7 @@ import rclpy
 from actuator_mapping import load_maps
 from ament_index_python.packages import get_package_share_directory
 from control_msgs.msg import DynamicJointState, InterfaceValue
-from rcl_interfaces.msg import ParameterDescriptor, SetParametersResult
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from std_srvs.srv import Trigger
@@ -34,7 +34,7 @@ class References:
             or sample.get("velocity") != 0
             or not math.isfinite(sample["position"])
         ):
-            raise ValueError("Require stationary, healthy shaft feedback")
+            raise ValueError("Require stationary, healthy carriage feedback")
         limits = (sample.get("reverse_limit"), sample.get("forward_limit"))
         required = {"negative": (1, 0), "positive": (0, 1), "zero": (0, 0)}[kind]
         if limits != required:
@@ -82,7 +82,7 @@ class Calibration(Node):
             "positive_travel": ref.positive - ref.zero if ref.valid else math.nan,
             "negative_travel": ref.zero - ref.negative if ref.valid else math.nan,
             "valid": ref.valid,
-            "units": "rad",
+            "units": "m",
         }
         self.writing = True
         try:
@@ -136,9 +136,6 @@ class Calibration(Node):
             if axis not in self.axes:
                 self.axes[axis] = References()
                 self.announce(axis)
-                self.declare_parameter(
-                    axis + ".metres_per_rad", 0.0, ParameterDescriptor(read_only=True)
-                )
                 for kind in ("zero", "negative", "positive"):
                     self.create_service(
                         Trigger,
@@ -163,9 +160,9 @@ class Calibration(Node):
             result.interface_values.append(
                 InterfaceValue(
                     interface_names=[
-                        "zero_rad",
-                        "negative_travel_rad",
-                        "positive_travel_rad",
+                        "zero_m",
+                        "negative_travel_m",
+                        "positive_travel_m",
                         "valid",
                     ],
                     values=[
@@ -176,12 +173,8 @@ class Calibration(Node):
                     ],
                 )
             )
-            scale = self.get_parameter(axis + ".metres_per_rad").value
-            if (
-                not ref.valid
-                or not math.isfinite(scale)
-                or scale == 0
-                or not ref.negative <= self.latest[axis]["position"] <= ref.positive
+            if not ref.valid or not (
+                ref.negative <= self.latest[axis]["position"] <= ref.positive
             ):
                 continue
             key = {
@@ -193,9 +186,7 @@ class Calibration(Node):
             neutral = self.model["neutral_cad"][key]
             domain = self.model["joints"][key]
             mapping = self.maps[key]
-            s = (self.latest[axis]["position"] - ref.zero) * scale + mapping.forward(
-                neutral
-            )
+            s = self.latest[axis]["position"] - ref.zero + mapping.forward(neutral)
             try:
                 angles[key] = (
                     mapping.inverse(

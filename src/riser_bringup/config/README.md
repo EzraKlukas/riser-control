@@ -13,46 +13,16 @@ and effort. Servo gains and limits are provisional simulation values.
 
 ## Registering a controller
 
-Calibration provides a complete example. These are the bringup changes needed
-after implementing a controller plugin:
+Register the instance name and exported plugin type under
+`controller_manager.ros__parameters`. Give its node a block of the same name and
+pass that file to the spawner with `--param-file`. The controller's interface
+configuration methods define its claims. Load controllers with competing claims
+inactive and switch them explicitly.
 
-1. In `controllers.yaml`, register its **instance name** under
-   `controller_manager.ros__parameters`. `type` must match the class name exported
-   by the controller package's plugin XML:
-
-   ```yaml
-   controller_manager:
-     ros__parameters:
-       calibration_controller:
-         type: riser_calibration/CalibrationController
-   ```
-
-2. Add the controller's parameters under a top-level block with the **same
-   instance name**. Only parameters declared/read by that controller have an
-   effect; listing interfaces in YAML does not make a custom controller claim
-   them. Its `command_interface_configuration()` and
-   `state_interface_configuration()` methods define the claims.
-
-   ```yaml
-   calibration_controller:
-     ros__parameters:
-       lower_limits: [-0.335, -0.335, -0.335, -0.08]
-       upper_limits: [0.335, 0.335, 0.335, 0.24]
-       speeds: [0.01, 0.01, 0.01, 0.005]
-   ```
-
-3. In `riser_bringup/package.xml`, add the plugin package as a runtime dependency:
-   `<exec_depend>riser_calibration</exec_depend>`. This makes the package
-   dependency explicit; the controller is loaded dynamically, not linked into
-   bringup.
-4. In `launch/control.launch.py`, select its instance name for the existing
-   controller-manager spawner. Calibration adds `calibrate:=true`, requires
-   Gazebo's `actuator_position` mode, and selects `calibration_controller`
-   instead of the normal position controller. Pass `controllers.yaml` to each
-   spawner with `--param-file` to load its parameters. The spawner loads,
-   configures and activates the selected controller. Do not activate controllers with
-   competing command claims. This Gazebo adapter also consumes only its
-   startup-selected command family, regardless of controller claims.
+The [G5 launch](../../riser_motion_bringup/launch/bottom_motor.launch.py)
+generates the registration and parameters for `calibration_controller` from
+`axes.yaml` and loads it inactive. The motion bringup package declares the
+plugin as a runtime dependency.
 
 The controller package must separately export its C++ class with
 `PLUGINLIB_EXPORT_CLASS`, describe it in `plugins.xml`, call
@@ -161,15 +131,14 @@ twice replaces the bias without accumulating it. The empty reference and
 participant mass survive the standing tare. An empty tare or reconfiguration
 clears the previous mass. Zero means no measurement is available.
 
-To use the measured mass after Gazebo homing, let the actuators reach home and
-settle, complete the procedure above, then load the experimental controller
-inactive and switch to it. The controller's angular velocity claims select the
+After the platform settles at its starting pose, complete the procedure above.
+Load the experimental controller inactive and switch to it. The controller's angular velocity claims select the
 new mode automatically.
 
 ```bash
 ros2 run controller_manager spawner inverted_pendulum --inactive
 ros2 control switch_controllers --strict \
-  --deactivate calibration_controller --activate inverted_pendulum
+  --deactivate riser_position_controller --activate inverted_pendulum
 ```
 
 On activation it takes one snapshot of `ankle_wrench/subject_mass_kg` for the

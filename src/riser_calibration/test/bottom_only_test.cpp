@@ -10,41 +10,52 @@ int main(int argc, char **argv) {
   params.controller_name = "bottom_calibration_test";
   params.controller_manager_update_rate = 1000;
   params.robot_description = R"(<robot name="calibration">
-    <link name="base"/>
+    <link name="base"/><link name="carriage"/>
+    <joint name="bottom_motor" type="prismatic">
+      <parent link="base"/><child link="carriage"/>
+      <limit lower="-1" upper="1" effort="0" velocity="0.02"/>
+    </joint>
     <ros2_control name="test_hardware" type="system"><hardware>
     <plugin>mock_components/GenericSystem</plugin></hardware>
-    <gpio name="bottom_actuator">
-      <command_interface name="position"/><state_interface name="position"/>
-      <state_interface name="limit_switch_lower"/><state_interface name="limit_switch_upper"/>
-    </gpio></ros2_control></robot>)";
+    <joint name="bottom_motor">
+      <command_interface name="velocity"/><state_interface name="position"/>
+      <state_interface name="velocity"/><state_interface name="ready"/>
+      <state_interface name="feedback_valid"/>
+      <state_interface name="reverse_limit"/><state_interface name="forward_limit"/>
+    </joint></ros2_control></robot>)";
   if (controller.init(params) != Result::OK)
     return 1;
   const auto node = controller.get_node();
   node->set_parameters({
-      rclcpp::Parameter("lower_limits", std::vector<double>(4, -1.)),
-      rclcpp::Parameter("upper_limits", std::vector<double>(4, 1.)),
+      rclcpp::Parameter("max_velocity_m_s", .02),
+      rclcpp::Parameter("max_travel_m", .16),
+      rclcpp::Parameter("speed_m_s", .001),
   });
   const rclcpp_lifecycle::State state;
   if (controller.on_configure(state) != Callback::SUCCESS ||
       controller.command_interface_configuration().names !=
-          std::vector<std::string>{"bottom_actuator/position"} ||
-      controller.state_interface_configuration().names.size() != 3)
+          std::vector<std::string>{"bottom_motor/velocity"} ||
+      controller.state_interface_configuration().names.size() != 6)
     return 2;
 
-  double target = 0, position = -.8, lower = 1, upper = 0;
+  double target = NAN, position = 0, velocity = 0, lower = 0, upper = 0;
+  double ready = 1, feedback_valid = 1;
   auto command = std::make_shared<hardware_interface::CommandInterface>(
-      "bottom_actuator", "position", &target);
+      "bottom_motor", "velocity", &target);
   std::vector<hardware_interface::LoanedCommandInterface> commands;
   commands.emplace_back(command, nullptr);
   std::vector<hardware_interface::LoanedStateInterface> states;
   std::vector<std::shared_ptr<hardware_interface::StateInterface>> storage;
   for (const auto &[name, value] :
-       std::array<std::pair<const char *, double *>, 3>{
+       std::array<std::pair<const char *, double *>, 6>{
            {{"position", &position},
-            {"limit_switch_lower", &lower},
-            {"limit_switch_upper", &upper}}}) {
+            {"velocity", &velocity},
+            {"reverse_limit", &lower},
+            {"forward_limit", &upper},
+            {"ready", &ready},
+            {"feedback_valid", &feedback_valid}}}) {
     storage.push_back(std::make_shared<hardware_interface::StateInterface>(
-        "bottom_actuator", name, value));
+        "bottom_motor", name, value));
     states.emplace_back(storage.back());
   }
   controller.assign_interfaces(std::move(commands), std::move(states));
@@ -54,32 +65,50 @@ int main(int argc, char **argv) {
     return controller.update(rclcpp::Time(0),
                              rclcpp::Duration::from_seconds(.1));
   };
-  if (step() != Result::OK)
+  if (step() != Result::OK || target != 0)
     return 4;
-  position = .8;
+  ready = 2;
+  if (step() != Result::OK || target != -.001)
+    return 4;
+  position = -.02;
+  lower = 1;
+  if (step() != Result::OK || target != 0 ||
+      step() != Result::OK || target != .001)
+    return 5;
+  position = .04;
   lower = 0;
   upper = 1;
-  if (step() != Result::OK)
+  if (step() != Result::OK || target != 0 ||
+      step() != Result::OK || target != -.001)
     return 5;
   upper = 0;
-  for (int i = 0; i < 120; ++i)
-    if (step() != Result::OK)
-      return 6;
+  position = .009;
+  if (step() != Result::OK || target != 0)
+    return 6;
 
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node->get_node_base_interface());
-  const std::string prefix = "result.bottom_actuator.";
+  const std::string prefix = "result.bottom_motor.";
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
   while (std::chrono::steady_clock::now() < deadline &&
          !node->get_parameter(prefix + "valid").as_bool())
     executor.spin_once(std::chrono::milliseconds(100));
   if (!node->get_parameter(prefix + "valid").as_bool() ||
       std::abs(node->get_parameter(prefix + "negative_travel_m").as_double() -
-               .4) > 1e-9 ||
+               .03) > 1e-9 ||
       std::abs(node->get_parameter(prefix + "positive_travel_m").as_double() -
-               1.2) > 1e-9 ||
-      node->get_parameter("result.top_actuator.valid").as_bool())
+               .03) > 1e-9 ||
+      node->get_parameter("result.top_motor.valid").as_bool())
     return 7;
+  for (auto *invalid : {&ready, &feedback_valid}) {
+    if (controller.on_activate(state) != Callback::SUCCESS ||
+        step() != Result::OK || target != -.001)
+      return 8;
+    *invalid = (invalid == &ready) ? 1 : 0;
+    if (step() != Result::ERROR || target != 0)
+      return 9;
+    ready = 2;
+  }
   controller.release_interfaces();
   rclcpp::shutdown();
   return 0;

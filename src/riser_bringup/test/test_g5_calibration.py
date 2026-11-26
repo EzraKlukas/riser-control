@@ -14,7 +14,7 @@ from g5_calibration import Calibration
 
 
 def test_bottom_only_references():
-    rclpy.init(args=["--ros-args", "-p", "bottom_motor.metres_per_rad:=0.001"])
+    rclpy.init(args=[])
     node = Calibration()
     output = []
     node.pub.publish = output.append
@@ -43,26 +43,26 @@ def test_bottom_only_references():
         return node.capture("bottom_motor", kind, Trigger.Response()).success
 
     try:
-        feed(-2.0, 1.0, 1.0)
+        feed(-0.002, 1.0, 1.0)
         assert not capture("negative")
-        feed(-2.0, 1.0)
+        feed(-0.002, 1.0)
         assert capture("negative")
-        feed(4.0, 0.0, 1.0)
+        feed(0.004, 0.0, 1.0)
         assert capture("positive")
         assert not node.axes["bottom_motor"].valid
         feed(0.0)
         assert capture("zero")
         for key, value in {
             "zero": 0.0,
-            "negative_travel": 2.0,
-            "positive_travel": 4.0,
-            "units": "rad",
+            "negative_travel": 0.002,
+            "positive_travel": 0.004,
+            "units": "m",
             "valid": True,
         }.items():
             assert node.get_parameter("result.bottom_motor." + key).value == value
         angles = output[-1].interface_values[-1].values
         assert abs(angles[0]) < 1e-8 and math.isnan(angles[1]) and math.isnan(angles[2])
-        feed(1.0)
+        feed(0.001)
         assert abs(output[-1].interface_values[-1].values[0]) > 1e-5
         node.last = time.monotonic() - 1
         assert not capture("zero")
@@ -76,10 +76,7 @@ def test_bottom_only_references():
 
 def test_four_axis_angles_invalidate_only_missing_inputs():
     axes = ("bottom_motor", "top_motor", "torso_motor", "hip_motor")
-    args = ["--ros-args"]
-    for axis in axes:
-        args += ["-p", axis + ".metres_per_rad:=0.001"]
-    rclpy.init(args=args)
+    rclpy.init(args=[])
     node = Calibration()
     output = []
     node.pub.publish = output.append
@@ -113,17 +110,17 @@ def test_four_axis_angles_invalidate_only_missing_inputs():
 
     try:
         for reference, sample in [
-            ("negative", (-2.0, 1.0, 0.0)),
-            ("positive", (4.0, 0.0, 1.0)),
+            ("negative", (-0.002, 1.0, 0.0)),
+            ("positive", (0.004, 0.0, 1.0)),
             ("zero", (0.0,)),
         ]:
             feed(*sample)
             for axis in axes:
                 assert node.capture(axis, reference, Trigger.Response()).success
-        feed(0.3)
+        feed(0.0003)
         pitch, backboard, ml = output[-1].interface_values[-1].values
         assert all(math.isfinite(angle) for angle in (pitch, backboard, ml))
-        feed(0.3, invalid="hip_motor")
+        feed(0.0003, invalid="hip_motor")
         assert not node.get_parameter("result.hip_motor.valid").value
         next_pitch, next_backboard, next_ml = output[-1].interface_values[-1].values
         assert (next_pitch, next_backboard) == (pitch, backboard)

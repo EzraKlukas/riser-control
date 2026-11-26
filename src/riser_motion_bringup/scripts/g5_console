@@ -29,15 +29,15 @@ from riser_motion_bringup.srv import Jog
 
 class Console(W.QWidget):
     cap_names = (
-        "max_velocity_rad_s",
+        "max_velocity_m_s",
         "max_duration_s",
         "ramp_s",
-        "max_acceleration_rad_s2",
-        "max_travel_rad",
+        "max_acceleration_m_s2",
+        "max_travel_m",
     )
     labels: ClassVar[dict[str, str]] = {
-        "position": "Position (shaft rad)",
-        "velocity": "Velocity (shaft rad/s)",
+        "position": "Carriage position (m)",
+        "velocity": "Carriage velocity (m/s)",
         "torque_nm": "Drive torque (shaft N·m)",
         "torque_raw": "0x6077 (per mille)",
         "reverse_limit": "Negative limit",
@@ -83,10 +83,10 @@ class Console(W.QWidget):
             tabs.addTab(page, name)
         self.axis = W.QComboBox()
         self.axis.addItem("bottom_motor")
-        motion.addRow("Motor shaft", self.axis)
+        motion.addRow("Carriage", self.axis)
         self.readout = W.QPlainTextEdit(readOnly=True)
         motion.addRow(self.readout)
-        self.speed = self.field(motion, "Velocity (rad/s)", "0.01")
+        self.speed = self.field(motion, "Velocity (m/s)", "0.01")
         self.duration = self.field(motion, "Duration (s)", "1.0")
         self.budget = W.QLabel()
         motion.addRow("Host jog bounds", self.budget)
@@ -176,7 +176,7 @@ class Console(W.QWidget):
             },
         )
         self.param_node = self.field(system, "Parameter node", "/motor_profile")
-        self.param = self.field(system, "Parameter name", "max_velocity_rad_s")
+        self.param = self.field(system, "Parameter name", "max_velocity_m_s")
         self.value = self.field(system, "Typed YAML value", "")
         self.buttons(
             system,
@@ -444,9 +444,9 @@ class Console(W.QWidget):
         caps = self.caps.get(name)
         if caps:
             self.budget.setText(
-                f"{caps['max_velocity_rad_s']:.4g} rad/s, {caps['max_duration_s']:.4g} s, "
-                f"{caps['ramp_s']:.4g} s ramp, {caps['max_acceleration_rad_s2']:.4g} rad/s², "
-                f"{caps['max_travel_rad']:.4g} rad"
+                f"{caps['max_velocity_m_s']:.4g} m/s, {caps['max_duration_s']:.4g} s, "
+                f"{caps['ramp_s']:.4g} s ramp, {caps['max_acceleration_m_s2']:.4g} m/s², "
+                f"{caps['max_travel_m']:.4g} m"
             )
         else:
             self.budget.setText("Unavailable")
@@ -579,28 +579,28 @@ class Console(W.QWidget):
             caps = self.caps.get(name)
             if not caps:
                 raise ValueError("Waiting for the controller's jog bounds")
-            req.velocity_rad_s = float(self.speed.text())
+            req.velocity_m_s = float(self.speed.text())
             req.duration_s = float(self.duration.text())
             if (
                 time.monotonic() - self.last > 0.3
                 or self.samples[axis].get("ready") != 2
                 or self.samples[axis].get("feedback_valid") != 1
                 or (
-                    req.velocity_rad_s > 0
+                    req.velocity_m_s > 0
                     and self.samples[axis].get("forward_limit") != 0
                 )
                 or (
-                    req.velocity_rad_s < 0
+                    req.velocity_m_s < 0
                     and self.samples[axis].get("reverse_limit") != 0
                 )
-                or not math.isfinite(req.velocity_rad_s)
-                or abs(req.velocity_rad_s)
-                > min(caps["max_velocity_rad_s"], float(self.hw["max_velocity_rad_s"]))
-                or abs(req.velocity_rad_s) * req.duration_s
-                > min(caps["max_travel_rad"], float(self.hw["max_travel_rad"]))
+                or not math.isfinite(req.velocity_m_s)
+                or abs(req.velocity_m_s)
+                > min(caps["max_velocity_m_s"], float(self.hw["max_velocity_m_s"]))
+                or abs(req.velocity_m_s) * req.duration_s
+                > min(caps["max_travel_m"], float(self.hw["max_travel_m"]))
                 or not 2 * caps["ramp_s"] <= req.duration_s <= caps["max_duration_s"]
-                or abs(req.velocity_rad_s)
-                > caps["ramp_s"] * caps["max_acceleration_rad_s2"]
+                or abs(req.velocity_m_s)
+                > caps["ramp_s"] * caps["max_acceleration_m_s2"]
             ):
                 raise ValueError(
                     "Check readiness, speed, ramp, duration and travel budget"
@@ -628,7 +628,7 @@ class Console(W.QWidget):
             if cancel
             else [
                 "--velocity",
-                str(req.velocity_rad_s),
+                str(req.velocity_m_s),
                 "--duration",
                 str(req.duration_s),
             ]

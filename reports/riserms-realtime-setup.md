@@ -368,16 +368,15 @@ import yaml
 config = yaml.safe_load(Path("src/riser_motion_bringup/config/controllers.yaml").read_text())
 config["controller_manager"]["ros__parameters"].update(
     cpu_affinity=3, lock_memory=True, thread_priority=80)
-config["motor_profile"]["ros__parameters"]["speed_rad_s"] = 0.0
+config["motor_profile"]["ros__parameters"]["speed_m_s"] = 0.0
 Path(sys.argv[1]).write_text(yaml.safe_dump(config, sort_keys=False))
 PY
 # Repeat the launch with FEEDBACK=true for the second run.
 FEEDBACK=false
-# Use these reference bounds only if they fit the approved shaft limits.
+# The launch reads the commissioning limits from axes.yaml.
 ros2 launch riser_motion_bringup bottom_motor.launch.py \
   commissioning_disabled:=1 sync0_shift_ns:=650000 feedback:="$FEEDBACK" \
   controllers_file:="$RUN/controllers.yaml" \
-  max_velocity_rad_s:=0.1047197551 max_travel_rad:=0.05 \
   2>&1 | tee "$RUN/disabled-launch.log"
 ```
 
@@ -423,7 +422,6 @@ This time the launch loads `motor_profile` inactive.
 ros2 launch riser_motion_bringup bottom_motor.launch.py \
   commissioning_disabled:=0 sync0_shift_ns:=650000 \
   controllers_file:="$RUN/controllers.yaml" \
-  max_velocity_rad_s:=0.1047197551 max_travel_rad:=0.05 \
   2>&1 | tee "$RUN/hold-launch.log"
 ```
 
@@ -445,7 +443,7 @@ and the configured speed is exactly zero.
 ```bash
 ros2 control list_controllers
 ros2 control list_hardware_interfaces
-ros2 param get /motor_profile speed_rad_s
+ros2 param get /motor_profile speed_m_s
 ```
 
 Only after these checks, activate the profile deliberately:

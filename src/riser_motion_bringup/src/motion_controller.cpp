@@ -50,15 +50,15 @@ public:
           return result;
         });
     auto_declare<bool>("jog_mode", false);
-    auto_declare<double>("max_velocity_rad_s", 10.0);
-    auto_declare<double>("max_duration_s", 10.);
+    auto_declare<double>("max_velocity_m_s", 0.0);
+    auto_declare<double>("max_duration_s", 0.0);
     auto_declare<std::string>("joint", "bottom_motor");
     auto_declare<std::string>("profile", "ramp");
-    auto_declare<double>("speed_rad_s", 0.05);
+    auto_declare<double>("speed_m_s", 0.0);
     auto_declare<double>("duration_s", 4);
     auto_declare<double>("ramp_s", 1);
-    auto_declare<double>("max_travel_rad", 15.0);
-    auto_declare<double>("max_acceleration_rad_s2", 15.0);
+    auto_declare<double>("max_travel_m", 0.0);
+    auto_declare<double>("max_acceleration_m_s2", 0.0);
     auto_declare<double>("max_period_s", 0.005);
     return controller_interface::CallbackReturn::SUCCESS;
   }
@@ -66,19 +66,19 @@ public:
   on_configure(const rclcpp_lifecycle::State &) override {
     joint_ = get_node()->get_parameter("joint").as_string();
     settings_.profile = get_node()->get_parameter("profile").as_string();
-    settings_.speed = get_node()->get_parameter("speed_rad_s").as_double();
+    settings_.speed = get_node()->get_parameter("speed_m_s").as_double();
     settings_.duration = get_node()->get_parameter("duration_s").as_double();
     settings_.ramp = get_node()->get_parameter("ramp_s").as_double();
     settings_.max_travel =
-        get_node()->get_parameter("max_travel_rad").as_double();
+        get_node()->get_parameter("max_travel_m").as_double();
     settings_.max_acceleration =
-        get_node()->get_parameter("max_acceleration_rad_s2").as_double();
+        get_node()->get_parameter("max_acceleration_m_s2").as_double();
     settings_.max_period =
         get_node()->get_parameter("max_period_s").as_double();
     jog_mode_ = get_node()->get_parameter("jog_mode").as_bool();
     if (jog_mode_)
       settings_.profile = "ramp"; // A signed jog never reverses mid-request.
-    speed_cap_ = get_node()->get_parameter("max_velocity_rad_s").as_double();
+    speed_cap_ = get_node()->get_parameter("max_velocity_m_s").as_double();
     duration_cap_ = get_node()->get_parameter("max_duration_s").as_double();
     if (joint_.empty() || !std::isfinite(speed_cap_) ||
         !std::isfinite(duration_cap_) || speed_cap_ <= 0 ||
@@ -113,7 +113,7 @@ public:
             const double age = get_node()->now().seconds() -
                                (input->stamp.sec + input->stamp.nanosec * 1e-9);
             auto settings = settings_;
-            settings.speed = input->velocity_rad_s;
+            settings.speed = input->velocity_m_s;
             settings.duration = input->duration_s;
             request.cancel = input->cancel;
             if (!request.cancel &&

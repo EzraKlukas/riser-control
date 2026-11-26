@@ -68,11 +68,14 @@ def check(axes):
                     lambda: (
                         len(window.samples) == len(axes.split(","))
                         and "motor_profile  inactive" in window.graph.toPlainText()
+                        and "calibration_controller  inactive"
+                        in window.graph.toPlainText()
                     )
                 )
                 assert set(window.excluded) == {"bottom", "top", "torso", "hip"} - set(
                     axes.split(",")
                 )
+                assert float(window.hw["position_units_per_m"]) == 104_857_600
                 window.readout.setFixedHeight(100)
                 scrollbar = window.readout.verticalScrollBar()
                 until(lambda: scrollbar.maximum() > 2)
@@ -113,6 +116,10 @@ def check(axes):
                         window.clients["motor_profile"] = client
                         until(client.service_is_ready)
                         until(lambda: "motor_profile" in window.caps)
+                        for key in ("max_velocity_m_s", "max_travel_m"):
+                            assert window.caps["motor_profile"][key] == float(
+                                window.hw[key]
+                            )
                         window.jog(False)
                         until(lambda: window.samples["bottom_motor"]["velocity"] > 0)
                         window.jog(True)

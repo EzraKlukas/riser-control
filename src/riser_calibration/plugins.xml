@@ -2,6 +2,6 @@
   <class name="riser_calibration/CalibrationController"
          type="riser_calibration_controller::CalibrationController"
          base_class_type="controller_interface::ControllerInterface">
-    <description>Sequential position-controlled actuator homing using both limit switches.</description>
+    <description>Sequential carriage homing by velocity using both limit switches.</description>
   </class>
 </library>

@@ -61,7 +61,8 @@ public:
         elapsed >= active_.duration || travelled >= caps.max_travel ||
         (active_.velocity < 0 && negative_limit != 0) ||
         (active_.velocity > 0 && positive_limit != 0) ||
-        std::abs(sample.velocity) > 3.0 * std::abs(active_.velocity) + 0.01) {
+        std::abs(sample.velocity) >
+            3.0 * std::abs(active_.velocity) + kSpeedToleranceMps) {
       stop();
       return 0;
     }

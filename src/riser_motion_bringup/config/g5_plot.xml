@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <root>
   <tabbed_widget name="Main Window" parent="main_window">
-    <Tab containers="1" tab_name="G5 feedback">
+    <Tab containers="1" tab_name="G5 carriage (m, m/s)">
       <Container>
         <DockSplitter count="1" orientation="-" sizes="1">
           <DockArea name="..."><plot mode="TimeSeries"/></DockArea>

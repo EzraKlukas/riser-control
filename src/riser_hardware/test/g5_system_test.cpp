@@ -102,9 +102,9 @@ int exercise(unsigned enabled, bool inhibited) {
   info.name = "G5Test";
   info.type = "system";
   info.hardware_parameters = {
-      {"position_units_per_rad", "1000"},
-      {"velocity_units_per_rad_s", "1000"},
-      {"max_velocity_rad_s", "1"},
+      {"position_units_per_m", "1000"},
+      {"velocity_units_per_m_s", "1000"},
+      {"max_velocity_m_s", "1"},
       {"cycle_ns", "1000000"},
       {"master_index", "0"},
       {"product_code", "4"},

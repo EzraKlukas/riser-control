@@ -39,7 +39,7 @@ config["ankle_wrench"]["ros__parameters"]["perturbation"].update(
 output.write_text(yaml.safe_dump(config))
 PY
 ros2 launch riser_bringup control.launch.py backend:=gazebo \
-  command_mode:=actuator_position calibrate:=true human:=true \
+  human:=true \
   controllers_file:="$trial_config" plot:=true wrench_input:=false
 ```
 
@@ -52,7 +52,7 @@ clock. Changing the file or its settings requires reconfiguring the controller.
 
 ## Start from the empty platform
 
-Wait for all four home commands and for the platform to settle. In a sourced
+Wait for the platform to settle at its starting pose. In a sourced
 terminal, tare the empty plates, spawn the participant, weigh it, and tare the
 standing wrench. Wait for each service to succeed before continuing. Spawn
 without the participant's optional ankle pulse to isolate the sensor perturbations.
@@ -67,7 +67,7 @@ ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: false}'
 ros2 run controller_manager spawner inverted_pendulum --inactive \
   --param-file "$(ros2 pkg prefix --share riser_human_balance)/config/pendulum.yaml"
 ros2 control switch_controllers --strict \
-  --deactivate calibration_controller --activate inverted_pendulum
+  --deactivate riser_position_controller --activate inverted_pendulum
 ```
 
 ## Add the perturbations

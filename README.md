@@ -60,63 +60,12 @@ same order, in rad/s. Send zeros to stop velocity commands. State feedback expos
 position, velocity and effort; `/riser/physical_joint_states` gives the actual
 pitch and lateral-slide states used for TF.
 
-## Actuator homing in Gazebo
+## G5 motor calibration
 
-Build and source the workspace, then launch the calibration controller instead
-of the normal motion controller:
-
-```bash
-ros2 launch riser_bringup control.launch.py backend:=gazebo \
-  command_mode:=actuator_position calibrate:=true plot:=false wrench_input:=false
-```
-
-Add `headless:=true` to run without the GUI. The controller visits the lower
-switch, upper switch, then home for top, torso, hip and bottom in that order.
-Home is halfway between measured switch positions for the first three axes and
-one quarter of the stroke from the lower switch for the bottom axis. Logs report
-each switch and when home is commanded. Home completion checks the **command**;
-that position stays applied while the next actuator calibrates and after the
-sequence finishes. It does not certify that physical motion has settled.
-Each completed actuator exposes `result.<actuator>.negative_travel_m`,
-`result.<actuator>.positive_travel_m`, and `result.<actuator>.valid` as
-controller parameters. The controller requests only the actuator resources
-declared in the robot description, including a bottom-only description.
-Simulated switches sit 3 mm inside the hard stops to accommodate servo tracking
-error. Home is calculated from those measured switch positions, so it can differ
-slightly from the geometric zero (including about 1.5 mm for the bottom target).
-
-`calibration_controller` in `src/riser_bringup/config/controllers.yaml` sets
-position-ramp speeds in m/s and target bounds in m, in that same actuator order.
-Keep those bounds consistent with `src/riser_bringup/urdf/model/kinematics.yaml`.
-Targets are clamped to those bounds while waiting for switches; each phase has
-a 180-second simulation-time timeout. A missing switch stops the sequence and
-leaves the last position commands applied. Reactivating restarts calibration.
-Gazebo caps each physical joint's speed at its full travel per simulated second
-in every command mode. The default calibration ramps of 0.45 m/s for
-top, torso and hip and 0.22 m/s for bottom budget about 12 simulated seconds of
-nominal travel from neutral. Servo tracking and switch detection affect the
-actual duration. Wall-clock duration also depends on Gazebo's real-time factor.
-
-You can switch to calibration in a running Gazebo session. In the example below,
-the default angular position controller is active. Use `calibrate:=true` to
-start directly in calibration.
-
-```bash
-ros2 run controller_manager spawner calibration_controller --inactive \
-  --param-file "$(ros2 pkg prefix riser_bringup)/share/riser_bringup/config/controllers.yaml"
-ros2 control switch_controllers --strict \
-  --deactivate riser_position_controller --activate calibration_controller
-```
-
-After homing and settling, switch directly from calibration to another motion
-controller in the same Gazebo session. Use a single strict stop/start request.
-The [ankle tare and weighing procedure](src/riser_bringup/config/README.md#tare-and-weigh-before-an-experiment)
-shows the sequence for the angular-velocity pendulum controller. Interface
-names are resolved and checked at activation.
-The update loop uses fixed storage and the supplied simulation period; milestone
-and failure logging can block, so this is not a hard realtime hardware controller.
-See the [controller registration guide](src/riser_bringup/config/README.md#registering-a-controller)
-for the package, YAML and launch steps to add future controllers.
+The C++ calibration controller uses carriage position in metres and commands
+velocity in m/s. The G5 launch configures it inactive. For the switch sequence,
+shared limits, and passive GUI captures, see the
+[G5 calibration procedure](src/riser_motion_bringup/README.md#calibration-and-balance).
 
 ## Simulated participant
 
@@ -124,13 +73,13 @@ Launch Gazebo with participant support while leaving the platform empty.
 
 ```bash
 ros2 launch riser_bringup control.launch.py backend:=gazebo \
-  command_mode:=actuator_position calibrate:=true human:=true \
+  human:=true \
   plot:=false wrench_input:=false
 ```
 
-Add `headless:=true` for a numerical run. Wait for all four actuators to
-reach home and settle before taring the empty platform. Then spawn the
-participant, measure its mass, and capture the standing tare.
+Add `headless:=true` for a numerical run. Wait for the platform to settle at its
+starting pose before taring it empty. Then spawn the participant, measure its
+mass, and capture the standing tare.
 
 ```bash
 ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: true}'
@@ -147,15 +96,15 @@ for weighing. The body has one sagittal ankle hinge. A pitch spring and damper
 act between the body and board and leave the weight supported through the feet.
 The footplate is held at its home pitch, and ML balance is outside this model.
 
-Load the robot pendulum with the matching height, then release both controllers
-with one switch. The participant starts ankle balance on the first physics step
-in angular velocity mode. Keep calibration active until making this switch.
+Load the robot pendulum with the matching height, then switch from the position
+controller. The participant starts ankle balance on the first physics step in
+angular velocity mode.
 
 ```bash
 ros2 run controller_manager spawner inverted_pendulum --inactive \
   --param-file "$(ros2 pkg prefix --share riser_human_balance)/config/pendulum.yaml"
 ros2 control switch_controllers --strict \
-  --deactivate calibration_controller --activate inverted_pendulum
+  --deactivate riser_position_controller --activate inverted_pendulum
 ```
 
 The ankle controller uses upright angle and angular velocity feedback. The

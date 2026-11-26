@@ -29,7 +29,7 @@ controller_interface::InterfaceConfiguration
 CalibrationController::command_interface_configuration() const {
   std::vector<std::string> names;
   for (const auto i : enabled_)
-    names.push_back(joint_names_[i] + "/position");
+    names.push_back(joint_names_[i] + "/velocity");
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
 }
@@ -38,8 +38,8 @@ controller_interface::InterfaceConfiguration
 CalibrationController::state_interface_configuration() const {
   std::vector<std::string> names;
   for (const auto i : enabled_)
-    for (const auto *type :
-         {"position", "limit_switch_lower", "limit_switch_upper"})
+    for (const auto *type : {"velocity", "position", "reverse_limit",
+                             "forward_limit", "ready", "feedback_valid"})
       names.push_back(joint_names_[i] + "/" + type);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
@@ -47,9 +47,9 @@ CalibrationController::state_interface_configuration() const {
 
 Callback CalibrationController::on_init() {
   try {
-    auto_declare<std::vector<double>>("lower_limits", {});
-    auto_declare<std::vector<double>>("upper_limits", {});
-    auto_declare<std::vector<double>>("speeds", {0.01, 0.01, 0.01, 0.01});
+    auto_declare<double>("max_velocity_m_s", 0.);
+    auto_declare<double>("max_travel_m", 0.);
+    auto_declare<double>("speed_m_s", 0.);
     for (const auto &name : joint_names_) {
       const auto prefix = "result." + name + ".";
       auto_declare<double>(prefix + "negative_travel_m", 0.);
@@ -86,14 +86,16 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
         for (const auto &axis : *resources) {
           if (axis.name != joint_names_[i])
             continue;
-          if (!has(axis.command_interfaces, "position") ||
+          if (!has(axis.command_interfaces, "velocity") ||
+              !has(axis.state_interfaces, "velocity") ||
               !has(axis.state_interfaces, "position") ||
-              !has(axis.state_interfaces, "limit_switch_lower") ||
-              !has(axis.state_interfaces, "limit_switch_upper")) {
-            RCLCPP_ERROR(
-                get_node()->get_logger(),
-                "%s lacks the linear position or limit-switch interfaces",
-                axis.name.c_str());
+              !has(axis.state_interfaces, "forward_limit") ||
+              !has(axis.state_interfaces, "reverse_limit") ||
+              !has(axis.state_interfaces, "ready") ||
+              !has(axis.state_interfaces, "feedback_valid")) {
+            RCLCPP_ERROR(get_node()->get_logger(),
+                         "%s lacks required calibration interfaces",
+                         axis.name.c_str());
             return Callback::ERROR;
           }
           enabled_.push_back(i);
@@ -104,27 +106,19 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
   if (enabled_.empty()) {
     RCLCPP_ERROR(
         get_node()->get_logger(),
-        "No linear actuator position interfaces in the robot description");
+        "No linear actuator velocity interfaces in the robot description");
     return Callback::ERROR;
   }
-  const auto lower =
-      get_node()->get_parameter("lower_limits").as_double_array();
-  const auto upper =
-      get_node()->get_parameter("upper_limits").as_double_array();
-  const auto speeds = get_node()->get_parameter("speeds").as_double_array();
-  if (lower.size() != kNumActuators || upper.size() != kNumActuators ||
-      speeds.size() != kNumActuators) {
+  const double speed_cap =
+      get_node()->get_parameter("max_velocity_m_s").as_double();
+  speed_m_s_ = get_node()->get_parameter("speed_m_s").as_double();
+  max_travel_m_ = get_node()->get_parameter("max_travel_m").as_double();
+  if (!std::isfinite(speed_cap) || !std::isfinite(speed_m_s_) ||
+      !std::isfinite(max_travel_m_) || speed_m_s_ <= 0 ||
+      speed_m_s_ > speed_cap || max_travel_m_ <= 0) {
     RCLCPP_ERROR(get_node()->get_logger(),
-                 "Expected four lower_limits, upper_limits and speeds");
+                 "Invalid calibration speed or commissioning limits");
     return Callback::ERROR;
-  }
-  for (const auto i : enabled_) {
-    if (!std::isfinite(lower[i]) || !std::isfinite(upper[i]) ||
-        !std::isfinite(speeds[i]) || lower[i] >= upper[i] || speeds[i] <= 0)
-      return Callback::ERROR;
-    actuators_[i].lower = lower[i];
-    actuators_[i].upper = upper[i];
-    actuators_[i].speed = speeds[i];
   }
   return Callback::SUCCESS;
 }
@@ -133,42 +127,47 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
   for (const auto i : enabled_) {
     auto &a = actuators_[i];
     const auto &name = joint_names_[i];
+    a.velocity = find_interface(state_interfaces_, name + "/velocity");
     a.position = find_interface(state_interfaces_, name + "/position");
-    a.lower_switch =
-        find_interface(state_interfaces_, name + "/limit_switch_lower");
-    a.upper_switch =
-        find_interface(state_interfaces_, name + "/limit_switch_upper");
-    a.command = find_interface(command_interfaces_, name + "/position");
-    if (!a.position || !a.lower_switch || !a.upper_switch || !a.command) {
+    a.lower_switch = find_interface(state_interfaces_, name + "/reverse_limit");
+    a.upper_switch = find_interface(state_interfaces_, name + "/forward_limit");
+    a.ready = find_interface(state_interfaces_, name + "/ready");
+    a.feedback_valid =
+        find_interface(state_interfaces_, name + "/feedback_valid");
+    a.command = find_interface(command_interfaces_, name + "/velocity");
+    if (!a.position || !a.velocity || !a.lower_switch || !a.upper_switch ||
+        !a.ready || !a.feedback_valid || !a.command) {
       RCLCPP_ERROR(get_node()->get_logger(), "Missing interface for %s",
                    name.c_str());
       return Callback::ERROR;
     }
-    if (!std::isfinite(read_state(*a.position)))
+    if (!std::isfinite(read_state(*a.velocity)))
       return Callback::ERROR;
-    a.target = std::clamp(read_state(*a.position), a.lower, a.upper);
+    a.target_velocity = 0.0; // zero velocity to start.
+    a.initial_position = read_state(*a.position);
     a.state = FINDING_NEG_LIMIT;
   }
   for (const auto i : enabled_)
-    if (!actuators_[i].command->set_value(actuators_[i].target)) {
+    if (!actuators_[i].command->set_value(actuators_[i].target_velocity)) {
       RCLCPP_ERROR(get_node()->get_logger(),
-                   "Could not write calibration hold target");
+                   "Could not write calibration hold velocity target_velocity");
       return Callback::ERROR;
     }
   for (auto &result : results_)
     result.valid.store(false);
   current_actuator_ = 0;
   phase_seconds_ = 0;
+  started_ = false;
   failed_ = false;
   return Callback::SUCCESS;
 }
 
 Callback CalibrationController::on_deactivate(const rclcpp_lifecycle::State &) {
-  // Position commands hold the last valid targets; zero would request motion.
+  // End by requesting hold velocity.
   for (const auto i : enabled_)
-    if (!actuators_[i].command->set_value(actuators_[i].target)) {
+    if (!actuators_[i].command->set_value(0.)) {
       RCLCPP_ERROR(get_node()->get_logger(),
-                   "Could not write calibration hold target");
+                   "Could not write calibration hold velocity");
       return Callback::ERROR;
     }
   return Callback::SUCCESS;
@@ -176,34 +175,47 @@ Callback CalibrationController::on_deactivate(const rclcpp_lifecycle::State &) {
 
 Result CalibrationController::update(const rclcpp::Time &,
                                      const rclcpp::Duration &period) {
-  // Hold the last targets after an error until reactivated.
+  // Hold the last target_velocitys after an error until reactivated.
   if (failed_)
     return Result::OK;
   const auto fail = [&](const char *reason) {
     failed_ = true;
+    for (const auto i : enabled_)
+      if (!actuators_[i].command->set_value(0.)) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Could not write calibration hold velocity");
+      }
     RCLCPP_ERROR(get_node()->get_logger(), "Calibration stopped: %s", reason);
-    return Result::ERROR; // Leave all position targets at their last valid
-                          // values.
+    return Result::ERROR;
   };
   const double dt = period.seconds();
   if (!std::isfinite(dt) || dt < 0)
     return fail("invalid update period");
+  bool waiting_for_enable = false;
   for (const auto i : enabled_) {
     const auto &a = actuators_[i];
+    const double ready = read_state(*a.ready);
+    if (read_state(*a.feedback_valid) != 1 ||
+        (ready != 2 && (ready != 1 || started_)))
+      return fail("drive not ready or feedback invalid");
+    waiting_for_enable |= ready == 1;
     const double lower = read_state(*a.lower_switch),
                  upper = read_state(*a.upper_switch);
-    if (!std::isfinite(read_state(*a.position)) || (lower != 0 && lower != 1) ||
+    if (!std::isfinite(read_state(*a.position)) ||
+        !std::isfinite(read_state(*a.velocity)) || (lower != 0 && lower != 1) ||
         (upper != 0 && upper != 1) || (lower && upper))
-      return fail("invalid position or limit-switch state");
+      return fail("invalid position, velocity, or limit-switch state");
   }
-  if (dt == 0 || current_actuator_ == enabled_.size())
+  // since we increase current_actuator_ each axis, current_actuator_ ==
+  // enabled_.size() means we've calibrated all the axes.
+  if (dt == 0 || waiting_for_enable || current_actuator_ == enabled_.size())
     return Result::OK;
+  started_ = true;
   if ((phase_seconds_ += dt) > 180.)
-    return fail("phase exceeded 180 seconds without reaching its target");
-
+    return fail(
+        "phase exceeded 180 seconds without reaching its target_velocity");
   const auto index = enabled_[current_actuator_];
   auto &a = actuators_[index];
-  const double step = a.speed * dt;
   switch (a.state) {
   case FINDING_NEG_LIMIT:
     if (read_state(*a.lower_switch)) {
@@ -212,8 +224,9 @@ Result CalibrationController::update(const rclcpp::Time &,
       phase_seconds_ = 0;
       RCLCPP_INFO(get_node()->get_logger(), "%s: lower limit %.6f m",
                   joint_names_[index].c_str(), a.lower_position);
+      a.target_velocity = 0.; // should I stay at zero velocity for a bit?
     } else {
-      a.target = std::max(a.lower, a.target - step);
+      a.target_velocity = -speed_m_s_;
     }
     break;
   case FINDING_POS_LIMIT:
@@ -221,12 +234,8 @@ Result CalibrationController::update(const rclcpp::Time &,
       a.upper_position = read_state(*a.position);
       if (a.upper_position <= a.lower_position)
         return fail("upper limit is not above lower limit");
-      // Bottom neutral is one quarter of its stroke; the other axes are
-      // centred.
-      const double fraction = 0.5;
-      a.home = std::clamp(a.lower_position +
-                              fraction * (a.upper_position - a.lower_position),
-                          a.lower, a.upper);
+      // initially: home is halfway between limits.
+      a.home = (a.lower_position + a.upper_position) / 2;
       if (!(a.lower_position < a.home && a.home < a.upper_position))
         return fail("home is outside the measured switch interval");
       a.state = GOING_HOME;
@@ -234,15 +243,24 @@ Result CalibrationController::update(const rclcpp::Time &,
       RCLCPP_INFO(get_node()->get_logger(),
                   "%s: upper limit %.6f m; home %.6f m",
                   joint_names_[index].c_str(), a.upper_position, a.home);
+      a.target_velocity = 0.; // hold, don't keep driving into the limit.
     } else {
-      a.target = std::min(a.upper, a.target + step);
+      if (read_state(*a.position) - a.lower_position > max_travel_m_) {
+        a.target_velocity = 0.;
+        return fail("inter-switch distance greater than stored parameter");
+      } else
+        a.target_velocity = speed_m_s_;
     }
     break;
   case GOING_HOME:
-    a.target += std::clamp(a.home - a.target, -step, step);
-    if (a.target == a.home) {
-      if (!a.command->set_value(a.target))
-        return fail("could not write home target");
+    // actually, I'm not going to fuss about correcting position if I overshoot
+    // home at first. Keep it simple, keep it safe.
+    if (read_state(*a.position) > a.home)
+      a.target_velocity = -speed_m_s_;
+    else {
+      a.target_velocity = 0.;
+      if (!a.command->set_value(a.target_velocity))
+        return fail("could not write final velocity hold");
       auto &result = results_[index];
       result.negative.store(a.home - a.lower_position);
       result.positive.store(a.upper_position - a.home);
@@ -258,8 +276,8 @@ Result CalibrationController::update(const rclcpp::Time &,
   case HOME:
     break;
   }
-  if (!a.command->set_value(a.target))
-    return fail("could not write actuator target");
+  if (!a.command->set_value(a.target_velocity))
+    return fail("could not write actuator target_velocity");
   return Result::OK;
 }
 void CalibrationController::publish_results() {
