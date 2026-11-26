@@ -5,8 +5,8 @@
 namespace riser_motion_bringup {
 struct Settings {
   std::string profile = "ramp";
-  double speed = 0.05, duration = 4, ramp = 1, max_travel = 0.2,
-         max_acceleration = 0.1;
+  double speed = 10.0, duration = 5, ramp = 1, max_travel = 30.0,
+         max_acceleration = 50.0;
   double max_period = 0.005;
 };
 inline bool valid(const Settings &s) {
@@ -105,7 +105,8 @@ public:
         return 0;
       waiting_ = false;
     }
-    return profile_.update(dt, sample.position, sample.velocity, sample.ready == 2);
+    return profile_.update(dt, sample.position, sample.velocity,
+                           sample.ready == 2);
   }
 };
 } // namespace riser_motion_bringup

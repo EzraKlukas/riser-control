@@ -77,8 +77,7 @@ struct G5Axis {
             const ec_domain_state_t &domain,
             std::chrono::steady_clock::duration interval, double dt,
             uint32_t cycle_ns_, bool commissioning_disabled_,
-            double position_scale_, double velocity_scale_, double speed_limit_,
-            double travel_limit_) {
+            double position_scale_, double velocity_scale_, double speed_limit_) {
     if (!io_ok)
       guard_.trip();
     const bool healthy =
@@ -131,8 +130,7 @@ struct G5Axis {
         ++stats_.preop_cycles;
       stats_.was_operational = slave.operational;
     }
-    ready_ = guard_.observe(feedback, dt, cycle_ns_ * 1e-9, speed_limit_,
-                            travel_limit_, claimed_);
+    ready_ = guard_.observe(feedback, dt, cycle_ns_ * 1e-9, speed_limit_, claimed_);
     host_fault = guard_.reason();
   }
 

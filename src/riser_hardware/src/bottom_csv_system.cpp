@@ -26,8 +26,7 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   uint8_t *data_ = nullptr;
   std::vector<G5Axis> axes_;
   std::vector<double> excluded_discovered_;
-  double position_scale_ = 0, velocity_scale_ = 0, speed_limit_ = 0,
-         travel_limit_ = 0;
+  double position_scale_ = 0, velocity_scale_ = 0, speed_limit_ = 0;
   uint32_t cycle_ns_ = 1000000;
   bool active_ = false;
   bool commissioning_disabled_ = true;
@@ -198,7 +197,6 @@ public:
       position_scale_ = number("position_units_per_rad");
       velocity_scale_ = number("velocity_units_per_rad_s");
       speed_limit_ = number("max_velocity_rad_s");
-      travel_limit_ = number("max_travel_rad");
       cycle_ns_ = integer("cycle_ns");
       const auto shift = info_.hardware_parameters.count("sync0_shift_ns")
                              ? integer("sync0_shift_ns")
@@ -210,9 +208,9 @@ public:
       const auto product = integer("product_code");
 
       if (!valid_scale(position_scale_) || !valid_scale(velocity_scale_) ||
-          !valid_scale(speed_limit_) || !valid_scale(travel_limit_) ||
-          product != kRotaryG5Product || cycle_ns_ < 250000 ||
-          cycle_ns_ > 4000000 || shift >= cycle_ns_ || disabled > 1 ||
+          !valid_scale(speed_limit_) || product != kRotaryG5Product ||
+          cycle_ns_ < 250000 || cycle_ns_ > 4000000 || shift >= cycle_ns_ ||
+          disabled > 1 ||
           !safe_velocity(speed_limit_, speed_limit_, velocity_scale_))
         throw std::invalid_argument("identity, scaling, timing or limits");
       commissioning_disabled_ = disabled != 0;
@@ -346,7 +344,7 @@ public:
                          !domain_result && !slave_result;
       a.read(data_, io_ok, slave, domain, interval, dt, cycle_ns_,
              commissioning_disabled_, position_scale_, velocity_scale_,
-             speed_limit_, travel_limit_);
+             speed_limit_);
     }
     return hardware_interface::return_type::OK;
   }

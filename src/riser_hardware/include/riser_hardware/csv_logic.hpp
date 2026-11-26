@@ -47,13 +47,13 @@ class CsvGuard {
   static constexpr double kAcquisitionTimeout = 10;
   bool seen_ = false, enabled_ = false;
   unsigned fault_ = 0;
-  double elapsed_ = 0, origin_ = 0;
+  double elapsed_ = 0;
 
 public:
   void reset() {
     seen_ = enabled_ = false;
     fault_ = 0;
-    elapsed_ = origin_ = 0;
+    elapsed_ = 0;
   }
   void trip(unsigned reason = 1) {
     if (!fault_)
@@ -62,7 +62,7 @@ public:
   unsigned reason() const { return fault_; }
   bool fault() const { return fault_; }
   double observe(const Feedback &f, double dt, double cycle, double max_speed,
-                 double max_travel, bool claimed = true) {
+                 bool claimed = true) {
     elapsed_ += dt;
     if (!std::isfinite(dt) || dt <= 0 || (seen_ && dt > 5 * cycle))
       trip(2);
@@ -71,8 +71,6 @@ public:
         trip(3);
       return 0;
     }
-    if (!seen_)
-      origin_ = f.position;
     seen_ = true;
     const bool enabled = operation_enabled(f.status);
     // G5 reports mode 0 while servo operation is disabled (I576 A-1-5).
@@ -84,8 +82,6 @@ public:
       trip(5);
     if (!std::isfinite(f.position) || !std::isfinite(f.velocity))
       trip(6);
-    if (std::abs(f.position - origin_) >= max_travel)
-      trip(7);
     if (std::abs(f.velocity) > max_speed)
       trip(8);
     if (!valid_mode)

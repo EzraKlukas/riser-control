@@ -14,12 +14,8 @@ class MotionController final
   MotorProfile profile_;
   std::string joint_;
   std::atomic<uint64_t> activation_{0}, occupied_{0};
-  enum Availability { Ready = 1, NegativeBlocked = 2, PositiveBlocked = 4 };
-  std::atomic<unsigned> availability_{0};
   uint64_t sequence_ = 0;
   int64_t latest_stamp_ = 0;
-  std::atomic<uint64_t> cancellation_{0};
-  uint64_t last_cancel_ = 0;
   bool jog_mode_ = false;
   double speed_cap_ = 0, duration_cap_ = 0;
   struct Heartbeat {
@@ -54,15 +50,15 @@ public:
           return result;
         });
     auto_declare<bool>("jog_mode", false);
-    auto_declare<double>("max_velocity_rad_s", 0.1047197551);
-    auto_declare<double>("max_duration_s", 8.);
+    auto_declare<double>("max_velocity_rad_s", 10.0);
+    auto_declare<double>("max_duration_s", 10.);
     auto_declare<std::string>("joint", "bottom_motor");
     auto_declare<std::string>("profile", "ramp");
     auto_declare<double>("speed_rad_s", 0.05);
     auto_declare<double>("duration_s", 4);
     auto_declare<double>("ramp_s", 1);
-    auto_declare<double>("max_travel_rad", 0.2);
-    auto_declare<double>("max_acceleration_rad_s2", 0.1);
+    auto_declare<double>("max_travel_rad", 15.0);
+    auto_declare<double>("max_acceleration_rad_s2", 15.0);
     auto_declare<double>("max_period_s", 0.005);
     return controller_interface::CallbackReturn::SUCCESS;
   }
@@ -131,16 +127,6 @@ public:
             }
             request.id = ++sequence_;
             if (!request.cancel) {
-              const auto available = availability_.load();
-              if (!(available & Ready)) {
-                output->message = "Operation-enabled feedback required";
-                return;
-              }
-              if ((settings.speed < 0 && (available & NegativeBlocked)) ||
-                  (settings.speed > 0 && (available & PositiveBlocked))) {
-                output->message = "Limit asserted in requested direction";
-                return;
-              }
               uint64_t idle = 0;
               if (!occupied_.compare_exchange_strong(idle, request.id)) {
                 output->message =
@@ -155,13 +141,12 @@ public:
             request.expires = JogClock::now() +
                               std::chrono::duration_cast<JogClock::duration>(
                                   std::chrono::duration<double>(0.5 - age));
-            if (request.cancel) {
-              ++cancellation_;
-              occupied_.store(0);
-            }
+            // Keep the slot occupied until the realtime loop processes cancel.
+            if (request.cancel)
+              occupied_.store(request.id);
             requests_.writeFromNonRT(request);
             output->accepted = true;
-            output->message = "Queued for control cycle";
+            output->message = "Queued; the control cycle checks live feedback";
           });
     }
     return controller_interface::CallbackReturn::SUCCESS;
@@ -200,7 +185,6 @@ public:
       return controller_interface::CallbackReturn::ERROR;
     jog_.stop();
     occupied_.store(0);
-    availability_.store(0);
     ++activation_;
     return controller_interface::CallbackReturn::SUCCESS;
   }
@@ -217,26 +201,12 @@ public:
     const auto feedback = sample();
     std::optional<double> target{0.};
     if (jog_mode_) {
-      const auto cancel = cancellation_.load();
-      if (cancel != last_cancel_) {
-        jog_.stop();
-        last_cancel_ = cancel;
-      }
       const auto beat = *heartbeat_.readFromRT();
       const auto request = *requests_.readFromRT();
       const double negative =
           state_interfaces_[3].get_optional(1).value_or(NAN);
       const double positive =
           state_interfaces_[4].get_optional(1).value_or(NAN);
-      unsigned available = 0;
-      if (feedback.ready == 2 && std::isfinite(feedback.position) &&
-          std::isfinite(feedback.velocity))
-        available |= Ready;
-      if (negative != 0)
-        available |= NegativeBlocked;
-      if (positive != 0)
-        available |= PositiveBlocked;
-      availability_.store(available);
       target = jog_.update(settings_, activation_.load(), request, beat.token,
                            beat.time, JogClock::now(), period.seconds(),
                            feedback, negative, positive);

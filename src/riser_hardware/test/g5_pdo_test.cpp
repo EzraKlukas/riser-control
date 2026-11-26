@@ -28,7 +28,7 @@ int main() {
     domain.wc_state = EC_WC_COMPLETE;
     auto read = [&](bool healthy = true) {
       a.read(data, healthy, slave, domain, std::chrono::milliseconds(1), .001,
-             1000000, false, 100, 100, 1, 2);
+             1000000, false, 100, 100, 1);
     };
     a.claimed_ = true;
     for (uint32_t mask = 0; mask < 4; ++mask) {

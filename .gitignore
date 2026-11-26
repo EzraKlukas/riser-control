@@ -1,6 +1,8 @@
 # Colcon outputs (root and nested workspaces).
 build/
+build-pre-elm/
 install/
+install-pre-elm/
 log/
 
 # Python caches.

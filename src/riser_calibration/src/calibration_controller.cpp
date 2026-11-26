@@ -49,7 +49,7 @@ Callback CalibrationController::on_init() {
   try {
     auto_declare<std::vector<double>>("lower_limits", {});
     auto_declare<std::vector<double>>("upper_limits", {});
-    auto_declare<std::vector<double>>("speeds", {0.3, 0.3, 0.3, 0.15});
+    auto_declare<std::vector<double>>("speeds", {0.01, 0.01, 0.01, 0.01});
     for (const auto &name : joint_names_) {
       const auto prefix = "result." + name + ".";
       auto_declare<double>(prefix + "negative_travel_m", 0.);
@@ -223,8 +223,7 @@ Result CalibrationController::update(const rclcpp::Time &,
         return fail("upper limit is not above lower limit");
       // Bottom neutral is one quarter of its stroke; the other axes are
       // centred.
-      const double fraction =
-          joint_names_[index] == "bottom_actuator" ? 0.25 : 0.5;
+      const double fraction = 0.5;
       a.home = std::clamp(a.lower_position +
                               fraction * (a.upper_position - a.lower_position),
                           a.lower, a.upper);

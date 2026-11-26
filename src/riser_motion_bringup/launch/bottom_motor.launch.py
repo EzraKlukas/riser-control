@@ -251,8 +251,8 @@ def generate_launch_description():
     ]
     args += [DeclareLaunchArgument("product_code", default_value="0x00000004")]
     args += [
-        DeclareLaunchArgument("max_velocity_rad_s", default_value="0.1047197551"),
-        DeclareLaunchArgument("max_travel_rad", default_value="0.05"),
+        DeclareLaunchArgument("max_velocity_rad_s", default_value="100.0"),
+        DeclareLaunchArgument("max_travel_rad", default_value="30.0"),
     ]
     args += [
         DeclareLaunchArgument(

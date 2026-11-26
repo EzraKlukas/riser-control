@@ -34,52 +34,52 @@ int main() {
   }
   CsvGuard guard;
   Feedback f{false, 0, 0, 0x40, 9};
-  if (guard.observe(f, 1, .001, 1, 1) != 0 || guard.fault())
+  if (guard.observe(f, 1, .001, 1) != 0 || guard.fault())
     return 2;
   f.healthy = true;
-  if (guard.observe(f, .001, .001, 1, 1) != 1)
+  if (guard.observe(f, .001, .001, 1) != 1)
     return 3;
   f.status = 0x27;
-  if (guard.observe(f, .001, .001, 1, 1) != 2)
+  if (guard.observe(f, .001, .001, 1) != 2)
     return 4;
   f.healthy = false;
-  guard.observe(f, .001, .001, 1, 1);
+  guard.observe(f, .001, .001, 1);
   if (!guard.fault())
     return 5;
   f.healthy = true;
-  if (guard.observe(f, .001, .001, 1, 1) != 0)
+  if (guard.observe(f, .001, .001, 1) != 0)
     return 6;
   guard.reset();
   f.position = 0;
-  guard.observe(f, .001, .001, 1, 1);
-  f.position = 1;
-  if (guard.observe(f, .001, .001, 1, 1) != 0 || !guard.fault())
+  guard.observe(f, .001, .001, 1);
+  f.position = 16;
+  if (guard.observe(f, .001, .001, 1) != 2 || guard.fault())
     return 7;
   guard.reset();
   f.position = 0;
-  guard.observe(f, .001, .001, 1, 1);
-  if (guard.observe(f, .006, .001, 1, 1) != 0 || !guard.fault())
+  guard.observe(f, .001, .001, 1);
+  if (guard.observe(f, .006, .001, 1) != 0 || !guard.fault())
     return 8;
   guard.reset();
   f.healthy = false;
-  guard.observe(f, 11, .001, 1, 1);
+  guard.observe(f, 11, .001, 1);
   if (!guard.fault())
     return 9;
   guard.reset();
   f = {true, 0, 0, 0x27, 9};
-  guard.observe(f, .001, .001, 1, 1);
+  guard.observe(f, .001, .001, 1);
   f.mode = 8;
-  if (guard.observe(f, .001, .001, 1, 1) != 0 || !guard.fault())
+  if (guard.observe(f, .001, .001, 1) != 0 || !guard.fault())
     return 10;
   guard.reset();
   f = {true, 0, 2, 0x27, 9};
-  if (guard.observe(f, .001, .001, 1, 1) != 0 || !guard.fault())
+  if (guard.observe(f, .001, .001, 1) != 0 || !guard.fault())
     return 11;
   guard.reset();
   f = {true, 0, 0, 0x27, 9};
-  guard.observe(f, .001, .001, 1, 1);
+  guard.observe(f, .001, .001, 1);
   f.status = 0x23;
-  if (guard.observe(f, .001, .001, 1, 1) != 0 || !guard.fault())
+  if (guard.observe(f, .001, .001, 1) != 0 || !guard.fault())
     return 12;
   // G5's disabled status is 0x60, with warning/remote bits possibly set.
   if (enable_word(0x60) != 6 || enable_word(0x2e0) != 6)
@@ -94,34 +94,34 @@ int main() {
     return 15;
   guard.reset();
   f = {true, 0, 0, 0x0a70, 0};
-  if (guard.observe(f, .001, .001, 1, 1, false) != 1 ||
-      guard.observe(f, 6, .001, 1, 1, false) != 0 || !guard.fault())
+  if (guard.observe(f, .001, .001, 1, false) != 1 ||
+      guard.observe(f, 6, .001, 1, false) != 0 || !guard.fault())
     return 16;
   guard.reset();
-  if (guard.observe(f, .001, .001, 1, 1, false) != 1)
+  if (guard.observe(f, .001, .001, 1, false) != 1)
     return 17;
   for (int cycle = 0; cycle < 6000; ++cycle) {
-    if (guard.observe(f, .001, .001, 1, 1, false) != 1)
+    if (guard.observe(f, .001, .001, 1, false) != 1)
       return 18;
   }
   f.status = 0x27;
-  if (guard.observe(f, .001, .001, 1, 1) != 0 || !guard.fault())
+  if (guard.observe(f, .001, .001, 1) != 0 || !guard.fault())
     return 19;
   guard.reset();
   f.mode = 9;
-  if (guard.observe(f, .001, .001, 1, 1) != 2)
+  if (guard.observe(f, .001, .001, 1) != 2)
     return 20;
   f.status = 0x60;
   f.mode = 0;
-  if (guard.observe(f, .001, .001, 1, 1, false) != 1)
+  if (guard.observe(f, .001, .001, 1, false) != 1)
     return 21;
   guard.reset();
   f.healthy = false;
   for (int cycle = 0; cycle < 5300; ++cycle)
-    if (guard.observe(f, .001, .001, 1, 1, false) != 0 || guard.fault())
+    if (guard.observe(f, .001, .001, 1, false) != 0 || guard.fault())
       return 22;
   f.healthy = true;
-  if (guard.observe(f, .001, .001, 1, 1, false) != 1)
+  if (guard.observe(f, .001, .001, 1, false) != 1)
     return 23;
   return EXIT_SUCCESS;
 }

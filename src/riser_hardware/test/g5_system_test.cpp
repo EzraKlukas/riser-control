@@ -105,7 +105,6 @@ int exercise(unsigned enabled, bool inhibited) {
       {"position_units_per_rad", "1000"},
       {"velocity_units_per_rad_s", "1000"},
       {"max_velocity_rad_s", "1"},
-      {"max_travel_rad", "2"},
       {"cycle_ns", "1000000"},
       {"master_index", "0"},
       {"product_code", "4"},

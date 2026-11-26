@@ -31,7 +31,9 @@ def setup(context):
                     "controllers_file": LaunchConfiguration("g5_controllers_file"),
                 }.items(),
             ),
-            Node(package="riser_bringup", executable="g5_calibration.py", output="screen"),
+            Node(
+                package="riser_bringup", executable="g5_calibration.py", output="screen"
+            ),
         ]
     mode = LaunchConfiguration("command_mode").perform(context)
     calibrate = LaunchConfiguration("calibrate").perform(context) == "true"
@@ -39,13 +41,15 @@ def setup(context):
     if human and backend != "gazebo":
         raise ValueError("The simulated participant requires backend:=gazebo")
     if calibrate and (backend != "gazebo" or mode != "actuator_position"):
-        raise ValueError("Calibration requires backend:=gazebo command_mode:=actuator_position")
+        raise ValueError(
+            "Calibration requires backend:=gazebo command_mode:=actuator_position"
+        )
     if mode.startswith("actuator_") and backend != "gazebo":
         raise ValueError("Actuator command modes currently require the Gazebo backend")
     share = Path(get_package_share_directory("riser_bringup"))
     world = str(share / "worlds/riser_world.sdf")
-    plot = LaunchConfiguration("plot").perform(context) == "true";
-    wrench_input = LaunchConfiguration("wrench_input").perform(context) == "true";
+    plot = LaunchConfiguration("plot").perform(context) == "true"
+    wrench_input = LaunchConfiguration("wrench_input").perform(context) == "true"
     sim = backend == "gazebo"
     controllers = LaunchConfiguration("controllers_file").perform(context)
     plot_telemetry = LaunchConfiguration("plot_telemetry").perform(context) == "true"
@@ -84,7 +88,9 @@ def setup(context):
         actions += [
             SetEnvironmentVariable(
                 "GZ_SIM_SYSTEM_PLUGIN_PATH",
-                ":".join(plugin_dirs + [os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")]),
+                ":".join(
+                    plugin_dirs + [os.environ.get("GZ_SIM_SYSTEM_PLUGIN_PATH", "")]
+                ),
             )
         ]  # tells gazebo sim where to search for system plugin shared libraries at runtime.
         actions += [
@@ -141,7 +147,9 @@ def setup(context):
             )
         )
     controller_mode = mode.removeprefix("angular_")
-    chosen = "calibration_controller" if calibrate else f"riser_{controller_mode}_controller"
+    chosen = (
+        "calibration_controller" if calibrate else f"riser_{controller_mode}_controller"
+    )
     # Load the ordinary broadcaster before controller-exported states exist,
     # then activate the wrench provider before its dedicated consumer.
     names = ["joint_state_broadcaster", chosen]
@@ -149,10 +157,12 @@ def setup(context):
         names += ["ankle_wrench", "ankle_wrench_state_broadcaster"]
         if plot or plot_telemetry:
             names.append("ankle_wrench_plot_broadcaster")
-            actions.append(Node(
-                package="riser_bringup",
-                executable="ankle_plot_wrenches.py",
-            ))
+            actions.append(
+                Node(
+                    package="riser_bringup",
+                    executable="ankle_plot_wrenches.py",
+                )
+            )
     args = names + [
         "--controller-manager",
         "/controller_manager",
@@ -171,15 +181,17 @@ def setup(context):
     )
 
     if plot:
+        actions.append(Node(package="plotjuggler", executable="plotjuggler"))
+    if wrench_input:
         actions.append(
             Node(
-                package='plotjuggler',
-                executable='plotjuggler'
+                package="riser_subject_simulation",
+                executable="simulation_wrench_input",
+                arguments=["--gui"],
+                parameters=[{"use_sim_time": True}],
+                output="screen",
             )
         )
-    if wrench_input:
-        actions.append(Node(package="riser_subject_simulation", executable="simulation_wrench_input",
-            arguments=["--gui"], parameters=[{"use_sim_time": True}], output="screen"))
     return actions
 
 
@@ -200,8 +212,9 @@ def generate_launch_description():
                     / "config/controllers.yaml"
                 ),
             ),
-            DeclareLaunchArgument("plot_telemetry", default_value="false",
-                                  choices=["true", "false"]),
+            DeclareLaunchArgument(
+                "plot_telemetry", default_value="false", choices=["true", "false"]
+            ),
             DeclareLaunchArgument(
                 "coordinates_file",
                 default_value=str(
@@ -213,7 +226,9 @@ def generate_launch_description():
                 "headless", default_value="false", choices=["true", "false"]
             ),
             DeclareLaunchArgument("force_plate_rate", default_value="1000"),
-            DeclareLaunchArgument("human", default_value="false", choices=["true", "false"]),
+            DeclareLaunchArgument(
+                "human", default_value="false", choices=["true", "false"]
+            ),
             DeclareLaunchArgument(
                 "calibrate", default_value="false", choices=["true", "false"]
             ),
@@ -223,18 +238,20 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "command_mode",
                 default_value="position",
-                choices=["position", "velocity", "angular_position", "angular_velocity",
-                         "actuator_position", "actuator_velocity"],
+                choices=[
+                    "position",
+                    "velocity",
+                    "angular_position",
+                    "angular_velocity",
+                    "actuator_position",
+                    "actuator_velocity",
+                ],
             ),
             DeclareLaunchArgument(
-                "plot",
-                default_value="true",
-                choices=["true", "false"]
+                "plot", default_value="true", choices=["true", "false"]
             ),
             DeclareLaunchArgument(
-                "wrench_input",
-                default_value="true",
-                choices=["true", "false"]
+                "wrench_input", default_value="true", choices=["true", "false"]
             ),
             OpaqueFunction(function=setup),
         ]
