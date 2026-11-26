@@ -88,7 +88,9 @@ X1, X2, X3 order. The read publishes all six results about the factory
 transducer origin. Cross-terms can produce nonzero outputs for unwired
 axes. The right wrench is zero. Each plate's `live_mask`
 encodes wiring in Fx, Fy, Fz, Mx, My, Mz order from bit 0. The left mask is
-14 and the right mask is 0. `valid` checks the ELM samples. The existing
+14 and the right mask is 0. `valid` requires a fresh sample from each of
+X1–X3. General error, underrange, overrange and invalid PDO bits block
+validity. The diagnostic-message bit alone leaves the sample usable. The existing
 `/dynamic_joint_states` and `/g5_plot/dynamic_joint_states` carry these states.
 
 On 2026-11-26 with the G5 first and the ELM last, inhibited 60-second
@@ -97,6 +99,20 @@ checks logged zero incomplete G5 PDO cycles both without ELM acquisition
 the combined run. The sampled working counters were 3/3 and 1/1. X2 and
 X3 varied while X1 held at 0 and showed underrange. The bus returned to
 PREOP with no G5 alarm.
+
+In the pitch-interface checkout, the original mask produced zero valid
+left samples. X1/X2 reported `0x1001` and X3 intermittently `0x1201`,
+excluding the cycle-counter bits. With the diagnostic flag handled
+separately, the inhibited runs delivered 4,061 and 7,112 valid samples.
+X3 still reported underrange. No load calibration was performed.
+The G5 recorded ten isolated incomplete PDO cycles during startup in one
+ELM-enabled run. The paired repeat recorded zero during 16,084 OP cycles
+with acquisition off and 19,783 with acquisition on. PREOP failed to
+settle before the final test teardown and the G5 latched communications
+synchronization alarm 83.3 (`0x603F=0xFF83`, `0x4001=0xF383`). All three
+slaves subsequently reached PREOP with the master idle. The explicit
+`reset_g5_fault.sh` reset cleared both error registers and returned
+statusword `0x0270`. Servo enable stayed off in every run.
 
 ## Calibration and balance
 
@@ -125,7 +141,44 @@ parameters in metres. It uses measured carriage displacement in the CAD
 mapping. The derived pitch and ML angles are in radians. A missing, stale or
 faulted axis invalidates its session references.
 
-The inverted-pendulum controller's `mode` is `backboard`. It claims just backboard velocity and uses measured backboard state plus the ankle wrench provider. The existing equation produces only backboard acceleration and rate. Requests for `footplate` or `ml` fail configuration with a reason. Bottom-only carriage velocity cannot implement a footplate balance law without its specified equation and an identified transmission.
+### Real footplate pitch
+
+With the bottom motor enabled in the axis profile, the G5 system exposes
+`foot_plate_pitch/{position,velocity,valid}` in radians, radians per
+second and a 0/1 flag. All three start at zero. Supply the independently
+measured flat and both switch positions in encoder metres at launch:
+
+```bash
+ros2 launch riser_bringup control.launch.py backend:=ethercat commissioning_disabled:=1 \
+  footplate_zero_m:="$FLAT_M" footplate_min_m:="$MIN_M" footplate_max_m:="$MAX_M" \
+  footplate_direction:="$DIRECTION"
+```
+
+Use the passive observer's valid bottom result. `MIN_M` is zero minus
+negative travel, and `MAX_M` is zero plus positive travel. Set `DIRECTION`
+to `1` when a known pitch change gives the same sign of carriage displacement
+as the CAD mapping, or `-1` when the signs are opposite. Check the resulting
+angle against an independent measurement. The powered calibration's
+midpoint alone cannot establish flat. Relaunch to apply a new reference.
+Re-establish it after any encoder coordinate reset.
+Missing feedback or a position outside the CAD inverse range also clears
+the three states to zero.
+
+Pitch velocity uses the measured Jacobian to command CSV carriage velocity.
+Pitch position uses a proportional carriage position loop over CSV and
+requires an explicit positive `footplate_position_gain_s_inv`.
+The pitch commands respect the CAD rate limit, carriage speed cap, calibrated
+endpoints and physical switches. Only one of pitch position, pitch velocity
+and bottom carriage velocity can be claimed. Release the jog or calibration
+controller before switching to a pitch controller. Move within the measured
+range and verify direction and the position gain in a supervised checkout
+before activating a balance controller.
+
+The inverted-pendulum controller's `mode` is `backboard`. It claims backboard
+velocity and uses measured backboard state plus the ankle wrench provider.
+The existing equation produces backboard acceleration and rate. Requests
+for `footplate` or `ml` fail configuration. A footplate balance run still
+requires its own equation and gains.
 
 ## Disconnected checks
 

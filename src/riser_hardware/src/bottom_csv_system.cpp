@@ -1,6 +1,8 @@
 #include "elm3604.hpp"
+#include "footplate_pitch.hpp"
 #include "g5_axis.hpp"
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cinttypes>
 #include <ecrt.h>
@@ -18,6 +20,21 @@ namespace riser_hardware {
 namespace {
 constexpr uint32_t kOmronVendor = 0x00000083;
 constexpr uint32_t kRotaryG5Product = 0x00000004; // R88D-KN04L-ECT
+constexpr char kFootplate[] = "foot_plate_pitch";
+enum BottomCommand : unsigned { Linear = 1, PitchPosition = 2, PitchVelocity = 4 };
+
+unsigned bottom_commands(const std::vector<std::string> &keys) {
+  unsigned modes = 0;
+  for (const auto &key : keys) {
+    if (key == "bottom_motor/velocity")
+      modes |= Linear;
+    else if (key == "foot_plate_pitch/position")
+      modes |= PitchPosition;
+    else if (key == "foot_plate_pitch/velocity")
+      modes |= PitchVelocity;
+  }
+  return modes;
+}
 
 } // namespace
 
@@ -26,6 +43,9 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   ec_domain_t *domain_ = nullptr;
   uint8_t *data_ = nullptr;
   std::vector<G5Axis> axes_;
+  FootplatePitch pitch_;
+  bool has_pitch_ = false;
+  std::atomic<unsigned> bottom_claim_{0};
   Elm3604 elm_;
   bool force_plates_ = false;
   int coupler_position_ = -1, terminal_position_ = -1;
@@ -129,6 +149,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
     master_ = nullptr;
     domain_ = nullptr;
     elm_ = {};
+    pitch_ = {};
+    bottom_claim_ = 0;
     for (auto &a : axes_) {
       a.discovered = 0;
       a.feedback_valid = 0;
@@ -141,9 +163,13 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   void send(bool stopping) {
     const int reference = ecrt_master_sync_reference_clock(master_);
     const int slaves = ecrt_master_sync_slave_clocks(master_);
+    const unsigned mode = bottom_claim_;
     for (auto &a : axes_) {
       if (reference || slaves)
         a.guard_.trip();
+      if (!stopping && mode > Linear && a.name == "bottom_motor")
+        a.command_ =
+            pitch_.carriage_command(mode == PitchPosition, a.position_, speed_limit_);
       a.stage(data_, commissioning_disabled_, stopping, speed_limit_,
               velocity_scale_);
     }
@@ -172,7 +198,7 @@ public:
     const auto &info = params.hardware_info;
     if (SystemInterface::on_init(params) !=
             hardware_interface::CallbackReturn::SUCCESS ||
-        info.joints.empty() || info.joints.size() > 4)
+        info.joints.empty() || info.joints.size() > 5)
       return hardware_interface::CallbackReturn::ERROR;
     excluded_discovered_.assign(info.sensors.size(), NAN);
     for (const auto &sensor : info.sensors) {
@@ -189,12 +215,16 @@ public:
     std::set<std::string> joint_names;
     const std::set<std::string> supported{"bottom_motor", "top_motor",
                                           "torso_motor", "hip_motor"};
-    axes_.resize(info.joints.size());
-    for (size_t i = 0; i < axes_.size(); ++i) {
-      auto &a = axes_[i];
-      const auto &j = info.joints[i];
-      if (!supported.count(j.name) || !joint_names.insert(j.name).second)
+    for (const auto &j : info.joints) {
+      if (!joint_names.insert(j.name).second)
         return hardware_interface::CallbackReturn::ERROR;
+      if (j.name == kFootplate) {
+        has_pitch_ = true;
+        continue;
+      }
+      if (!supported.count(j.name))
+        return hardware_interface::CallbackReturn::ERROR;
+      auto &a = axes_.emplace_back();
       a.name = j.name;
       a.key = a.name + "/velocity";
       std::vector<hardware_interface::StateInterface> expected;
@@ -210,6 +240,8 @@ public:
                          }))
           return hardware_interface::CallbackReturn::ERROR;
     }
+    if (axes_.empty() || (has_pitch_ && !joint_names.count("bottom_motor")))
+      return hardware_interface::CallbackReturn::ERROR;
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   std::vector<hardware_interface::StateInterface>
@@ -217,6 +249,11 @@ public:
     std::vector<hardware_interface::StateInterface> result;
     for (auto &a : axes_)
       a.export_states(result);
+    if (has_pitch_) {
+      result.emplace_back(kFootplate, "position", &pitch_.position);
+      result.emplace_back(kFootplate, "velocity", &pitch_.velocity);
+      result.emplace_back(kFootplate, "valid", &pitch_.valid);
+    }
     if (force_plates_)
       elm_.export_states(result);
     for (size_t i = 0; i < info_.sensors.size(); ++i)
@@ -230,6 +267,10 @@ public:
     std::vector<hardware_interface::CommandInterface> result;
     for (auto &a : axes_)
       result.emplace_back(a.name, "velocity", &a.command_);
+    if (has_pitch_) {
+      result.emplace_back(kFootplate, "position", &pitch_.position_command);
+      result.emplace_back(kFootplate, "velocity", &pitch_.velocity_command);
+    }
     return result;
   }
   hardware_interface::CallbackReturn
@@ -256,6 +297,14 @@ public:
           !safe_velocity(speed_limit_, speed_limit_, velocity_scale_))
         throw std::invalid_argument("identity, scaling, timing or limits");
       commissioning_disabled_ = disabled != 0;
+      const auto &parameters = info_.hardware_parameters;
+      if (has_pitch_ && parameters.count("footplate_zero_m") &&
+          !pitch_.configure(
+              {number("footplate_lower_rad"), number("footplate_upper_rad")},
+              number("footplate_rate_rad_s"), number("footplate_zero_m"),
+              number("footplate_min_m"), number("footplate_max_m"),
+              number("footplate_direction"), number("footplate_position_gain_s_inv")))
+        throw std::invalid_argument("Invalid footplate calibration");
       master_ = ecrt_request_master(integer("master_index"));
       if (!master_)
         throw std::runtime_error("request master failed");
@@ -311,6 +360,7 @@ public:
       a.stats_ = {};
       a.claimed_ = false;
     }
+    bottom_claim_ = 0;
     active_ = true;
     last_ = std::chrono::steady_clock::now();
     return hardware_interface::CallbackReturn::SUCCESS;
@@ -320,6 +370,8 @@ public:
     if (data_)
       send(true);
     elm_.clear();
+    pitch_.read(false, 0, 0);
+    bottom_claim_ = 0;
     for (auto &a : axes_) {
       if (commissioning_disabled_ && active_)
         a.summary();
@@ -348,7 +400,15 @@ public:
   }
   hardware_interface::return_type
   prepare_command_mode_switch(const std::vector<std::string> &start,
-                              const std::vector<std::string> &) override {
+                              const std::vector<std::string> &stop) override {
+    const unsigned incoming = bottom_commands(start);
+    const unsigned remaining = bottom_claim_ & ~bottom_commands(stop);
+    if ((incoming & (incoming - 1)) || (incoming && remaining) ||
+        (incoming > Linear && (!has_pitch_ || !pitch_.direction)) ||
+        (incoming == PitchPosition && pitch_.position_gain <= 0))
+      return hardware_interface::return_type::ERROR;
+    if (commissioning_disabled_ && incoming)
+      return hardware_interface::return_type::ERROR;
     for (const auto &a : axes_)
       if (commissioning_disabled_ &&
           std::find(start.begin(), start.end(), a.key) != start.end())
@@ -361,7 +421,26 @@ public:
     auto result = prepare_command_mode_switch(start, stop);
     if (result != hardware_interface::return_type::OK)
       return result;
+    const unsigned incoming = bottom_commands(start);
+    const unsigned outgoing = bottom_commands(stop);
     for (auto &a : axes_) {
+      if (a.name == "bottom_motor" && (incoming || outgoing)) {
+        if (outgoing) {
+          bottom_claim_ &= ~outgoing;
+          a.claimed_ = bottom_claim_ != 0;
+        }
+        if (incoming) {
+          if (incoming > Linear && (!pitch_.valid || !a.ready_))
+            return hardware_interface::return_type::ERROR;
+          pitch_.position_command = pitch_.position;
+          pitch_.velocity_command = 0;
+          bottom_claim_ = incoming;
+          a.claimed_ = true;
+          a.limit_blocked = false;
+          a.command_ = incoming == Linear ? NAN : 0;
+        }
+        continue;
+      }
       if (std::find(stop.begin(), stop.end(), a.key) != stop.end())
         a.claimed_ = false;
       if (std::find(start.begin(), start.end(), a.key) != start.end()) {
@@ -400,6 +479,8 @@ public:
       a.read(data_, io_ok, slave, domain, interval, dt, cycle_ns_,
              commissioning_disabled_, position_scale_, velocity_scale_,
              speed_limit_);
+      if (has_pitch_ && a.name == "bottom_motor")
+        pitch_.read(a.feedback_valid, a.position_, a.velocity_);
     }
     return hardware_interface::return_type::OK;
   }

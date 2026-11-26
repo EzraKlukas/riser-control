@@ -92,8 +92,9 @@ struct Elm3604 {
     for (unsigned i = 0; i < channel_field.size(); ++i) {
       const uint16_t header = EC_READ_U16(data + status[i]);
       const int counter = header >> 14;
+      // Bit 12 announces a new diagnostic message, independently of PDO validity.
       fresh &= previous_counter[i] >= 0 && counter != previous_counter[i] &&
-               (header & 0xff) == 1 && !(header & 0x3700);
+               (header & 0xff) == 1 && !(header & 0x2700);
       previous_counter[i] = counter;
       signals[channel_field[i]] =
           EC_READ_S32(data + sample[i]) * uv_per_v_per_count[i];

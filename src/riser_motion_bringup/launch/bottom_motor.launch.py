@@ -1,11 +1,13 @@
 """Named rotary G5 axes sharing one master and the commissioned CSV scaling."""
 
+import json
 from copy import deepcopy
-from tempfile import NamedTemporaryFile
-import yaml
 from math import isfinite
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from xml.sax.saxutils import escape
+
+import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
@@ -27,6 +29,12 @@ MOTOR_ENCODER_COUNTS_PER_REV = 1 << 20
 
 
 STATES = "position velocity ready reverse_limit forward_limit digital_inputs feedback_valid statusword controlword operating_mode fault_code torque_raw torque_nm brake_release_request brake_output_feedback physical_brake discovered host_fault"
+FOOTPLATE_CALIBRATION = (
+    "footplate_zero_m",
+    "footplate_min_m",
+    "footplate_max_m",
+    "footplate_direction",
+)
 
 
 def setup(context):
@@ -153,6 +161,42 @@ def setup(context):
         if name not in enabled and axis.get("serial"):
             for key in ("position", "serial", "alias"):
                 values[name + "_motor_" + key] = str(axis[key])
+    if backend == "real" and "bottom" in enabled:
+        model = (
+            Path(get_package_share_directory("riser_bringup"))
+            / "urdf/model/kinematics.yaml"
+        )
+        pitch = json.loads(model.read_text())["joints"]["foot_pitch"]
+        axis = " ".join(str(value) for value in pitch["axis"])
+        links.append('<link name="foot_platform"/>')
+        joints.append(
+            '<joint name="foot_plate_pitch" type="revolute">'
+            f'<parent link="base"/><child link="foot_platform"/><axis xyz="{axis}"/>'
+            f'<limit lower="{pitch["lower"]}" upper="{pitch["upper"]}" '
+            f'velocity="{pitch["velocity"]}" effort="{pitch["effort"]}"/></joint>'
+        )
+        resources.append(
+            '<joint name="foot_plate_pitch"><command_interface name="position"/>'
+            '<command_interface name="velocity"/><state_interface name="position"/>'
+            '<state_interface name="velocity"/><state_interface name="valid"/></joint>'
+        )
+        reference = {
+            key: LaunchConfiguration(key).perform(context)
+            for key in FOOTPLATE_CALIBRATION
+        }
+        gain = LaunchConfiguration("footplate_position_gain_s_inv").perform(context)
+        if any(reference.values()) or float(gain) != 0:
+            if not all(reference.values()):
+                raise ValueError(
+                    "Footplate calibration requires flat, both endpoints and direction"
+                )
+            values.update(reference)
+            values.update(
+                footplate_lower_rad=str(pitch["lower"]),
+                footplate_upper_rad=str(pitch["upper"]),
+                footplate_rate_rad_s=str(pitch["velocity"]),
+                footplate_position_gain_s_inv=gain,
+            )
     if LaunchConfiguration("force_plates").perform(context) == "true":
         calibration_file = (
             Path(get_package_share_directory("riser_bringup"))
@@ -314,4 +358,6 @@ def generate_launch_description():
     args.append(
         DeclareLaunchArgument("force_plates", default_value="false", choices=["true", "false"])
     )
+    args += [DeclareLaunchArgument(key, default_value="") for key in FOOTPLATE_CALIBRATION]
+    args.append(DeclareLaunchArgument("footplate_position_gain_s_inv", default_value="0"))
     return LaunchDescription(args + [OpaqueFunction(function=setup)])

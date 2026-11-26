@@ -49,8 +49,8 @@ bridge_calibration:
   output_axes: riser_physical_xyz
   # Provisional MSA-6 jumper settings in ELM X1, X2, X3 order (Mx, Fz, Fy).
   # Replace these estimates with the actual settings for each channel.
-  msa6_gain: [1000, 1000, 1000]
-  msa6_excitation_v: [10.0, 10.0, 10.0]
+  msa6_gain: [3990, 3969, 3968]
+  msa6_excitation_v: [9.982, 9.982, 9.982]
   # Electrical input channels follow the factory order.
   channel_order: [VFx, VFy, VFz, VMx, VMy, VMz]
   input_units: "uV/V_excitation"
@@ -64,7 +64,7 @@ bridge_calibration:
       - [-0.0011,0.0007,  0.0077, 0.0009,  0.7447, -0.0042]
       - [0.0022, 0.0099,  0.0040, 0.0042,  0.0029,  0.4809]
     "7207":
-      - [2.8851, 0.0210,  0.0192,  0.0001, -0.0675,  0.0184]
+      - [2.90536, 0.01744,  -0.00497,  0.00669, -0.02733,  0.02525]
       - [0.0020, 2.9081, -0.0130,  0.0229,  0.0061, -0.0116]
       - [0.0496, 0.0027, 11.3053, -0.0047, -0.0334,  0.0207]
       - [-0.0017,0.0025, -0.0047,  1.2959, -0.0033, -0.0055]
