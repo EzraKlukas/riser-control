@@ -1,3 +1,4 @@
+#include "elm3604.hpp"
 #include "g5_axis.hpp"
 #include <algorithm>
 #include <chrono>
@@ -25,6 +26,9 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   ec_domain_t *domain_ = nullptr;
   uint8_t *data_ = nullptr;
   std::vector<G5Axis> axes_;
+  Elm3604 elm_;
+  bool force_plates_ = false;
+  int coupler_position_ = -1, terminal_position_ = -1;
   std::vector<double> excluded_discovered_;
   double position_scale_ = 0, velocity_scale_ = 0, speed_limit_ = 0;
   uint32_t cycle_ns_ = 1000000;
@@ -53,17 +57,30 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
     ec_master_info_t bus{};
     if (ecrt_master(master_, &bus))
       throw std::runtime_error("Cannot read EtherCAT master inventory");
-    if (bus.scan_busy || !bus.link_up || bus.slave_count > 4)
+    if (bus.scan_busy || !bus.link_up || bus.slave_count > 6)
       throw std::runtime_error("EtherCAT topology unavailable: link " +
                                std::string(bus.link_up ? "up" : "down") +
                                ", slaves " + std::to_string(bus.slave_count) +
                                ", scan busy " + std::to_string(bus.scan_busy));
     std::vector<G5Identity> detected;
+    std::set<uint32_t> peripherals;
+    int coupler = -1, terminal = -1;
     for (unsigned i = 0; i < bus.slave_count; ++i) {
       ec_slave_info_t found{};
       if (ecrt_master_get_slave(master_, i, &found))
         throw std::runtime_error("Cannot read slave identity at " +
                                  std::to_string(i));
+      if (found.vendor_id == Elm3604::vendor &&
+          found.product_code == Elm3604::coupler && coupler < 0) {
+        coupler = i;
+        peripherals.insert(i);
+      }
+      if (found.vendor_id == Elm3604::vendor &&
+          found.product_code == Elm3604::product &&
+          found.revision_number == Elm3604::revision && terminal < 0) {
+        terminal = i;
+        peripherals.insert(i);
+      }
       detected.push_back({found.vendor_id, found.product_code,
                           found.revision_number, found.alias,
                           found.serial_number});
@@ -80,22 +97,38 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
                            integer(name + "_alias"), integer(name + "_serial"),
                            enabled});
     }
-    validate_topology(addresses, detected);
+    validate_topology(addresses, detected, peripherals);
+    if (force_plates_ &&
+        (coupler < 0 || terminal != coupler + 1 ||
+         (elm_.domain && (coupler != coupler_position_ ||
+                          terminal != terminal_position_))))
+      throw std::runtime_error(
+          "Expected the EK1100 followed by the ELM3604-0002");
+    coupler_position_ = coupler;
+    terminal_position_ = terminal;
     for (size_t i = 0; i < info_.sensors.size(); ++i) {
       const auto &sensor = info_.sensors[i].name;
+      if (is_force_plate(sensor))
+        continue;
       const auto name = sensor.substr(0, sensor.size() - 9) + "_motor";
       const auto found =
           std::find_if(addresses.begin(), addresses.end(),
                        [&](const auto &a) { return a.name == name; });
       excluded_discovered_[i] =
-          found != addresses.end() && found->ring < detected.size();
+          found != addresses.end() && found->ring < detected.size() &&
+          !peripherals.count(found->ring);
     }
   }
+  static bool is_force_plate(const std::string &name) {
+    return name == "left_force_plate" || name == "right_force_plate";
+  }
+
   void release() {
     if (master_)
       ecrt_release_master(master_);
     master_ = nullptr;
     domain_ = nullptr;
+    elm_ = {};
     for (auto &a : axes_) {
       a.discovered = 0;
       a.feedback_valid = 0;
@@ -115,6 +148,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
               velocity_scale_);
     }
     const int queued = ecrt_domain_queue(domain_);
+    if (force_plates_ && ecrt_domain_queue(elm_.domain))
+      elm_.clear();
     const int sent = ecrt_master_send(master_);
     for (auto &a : axes_) {
       if (queued || sent) {
@@ -141,6 +176,10 @@ public:
       return hardware_interface::CallbackReturn::ERROR;
     excluded_discovered_.assign(info.sensors.size(), NAN);
     for (const auto &sensor : info.sensors) {
+      if (is_force_plate(sensor.name)) {
+        force_plates_ = true;
+        continue;
+      }
       if (sensor.name.size() < 10 ||
           sensor.name.substr(sensor.name.size() - 9) != "_excluded" ||
           sensor.state_interfaces.size() != 1 ||
@@ -178,9 +217,12 @@ public:
     std::vector<hardware_interface::StateInterface> result;
     for (auto &a : axes_)
       a.export_states(result);
+    if (force_plates_)
+      elm_.export_states(result);
     for (size_t i = 0; i < info_.sensors.size(); ++i)
-      result.emplace_back(info_.sensors[i].name, "discovered",
-                          &excluded_discovered_[i]);
+      if (!is_force_plate(info_.sensors[i].name))
+        result.emplace_back(info_.sensors[i].name, "discovered",
+                            &excluded_discovered_[i]);
     return result;
   }
   std::vector<hardware_interface::CommandInterface>
@@ -233,8 +275,16 @@ public:
           throw std::runtime_error("Slave configuration failed: " + a.name);
         a.configure_pdos(domain_, cycle_ns_, shift);
       }
+      if (force_plates_ &&
+          (cycle_ns_ != 1000000 ||
+           !ecrt_master_slave_config(master_, 0, coupler_position_,
+                                     Elm3604::vendor, Elm3604::coupler) ||
+           !elm_.configure(master_, terminal_position_)))
+        throw std::runtime_error("Cannot configure the ELM3604 input domain");
       if (ecrt_master_activate(master_) || !(data_ = ecrt_domain_data(domain_)))
         throw std::runtime_error("master activation failed");
+      if (force_plates_ && !(elm_.data = ecrt_domain_data(elm_.domain)))
+        throw std::runtime_error("Missing ELM3604 process data");
     } catch (const std::exception &e) {
       RCLCPP_ERROR(rclcpp::get_logger("bottom_csv"), "%s", e.what());
       release();
@@ -267,6 +317,7 @@ public:
   on_deactivate(const rclcpp_lifecycle::State &) override {
     if (data_)
       send(true);
+    elm_.clear();
     for (auto &a : axes_) {
       if (commissioning_disabled_ && active_)
         a.summary();
@@ -337,6 +388,8 @@ public:
     const int process_result = ecrt_domain_process(domain_);
     ec_domain_state_t domain{};
     const int domain_result = ecrt_domain_state(domain_, &domain);
+    if (force_plates_)
+      elm_.read(!time_result && !receive_result);
     for (auto &a : axes_) {
       ec_slave_config_state_t slave{};
       const int slave_result = ecrt_slave_config_state(a.slave_, &slave);

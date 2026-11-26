@@ -153,6 +153,13 @@ def setup(context):
         if name not in enabled and axis.get("serial"):
             for key in ("position", "serial", "alias"):
                 values[name + "_motor_" + key] = str(axis[key])
+    if LaunchConfiguration("force_plates").perform(context) == "true":
+        for side in ("left", "right"):
+            fields = "force.x force.y force.z torque.x torque.y torque.z live_mask valid"
+            interfaces = "".join(
+                f'<state_interface name="{field}"/>' for field in fields.split()
+            )
+            resources.append(f'<sensor name="{side}_force_plate">{interfaces}</sensor>')
     parameters = "".join(
         f'<param name="{key}">{escape(value)}</param>'
         for key, value in values.items()
@@ -285,4 +292,7 @@ def generate_launch_description():
             ),
         )
     ]
+    args.append(
+        DeclareLaunchArgument("force_plates", default_value="false", choices=["true", "false"])
+    )
     return LaunchDescription(args + [OpaqueFunction(function=setup)])

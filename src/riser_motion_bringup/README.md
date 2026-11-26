@@ -71,6 +71,28 @@ For maintenance, deactivate command owners and complete the ordered PREOP shutdo
 
 **Apply inactive mask** performs the same controlled restart without rebuilding. Release command claims first. On a mock use **Inactivate mock hardware**. On the real bench complete the ordered shutdown. The helper preserves existing launch arguments, replaces the enabled mask and starts motion profiles inactive. **Stop released manager** terminates the identified launch after checking the same preconditions. The CLI equivalents are `g5_rebuild --package riser_motion_bringup`, `g5_rebuild --mask bottom,top` and `g5_rebuild --stop` under `ros2 run riser_motion_bringup`.
 
+## ELM3604 checkout
+
+Add `force_plates:=true` to the EtherCAT launch. For a feedback-only
+checkout, leave `commissioning_disabled:=1`. The ELM uses a separate input
+domain with its existing one-sample PDO maps and electrical settings.
+Connect the G5 output to the EK1100 port marked X1 IN.
+
+The left plate publishes X1 as `torque.x`, X2 as `force.z`, and X3 as
+`force.y`. These three values are signed ADC counts pending calibration.
+The other nine wrench fields publish zero. Each plate's `live_mask` encodes
+wiring in Fx, Fy, Fz, Mx, My, Mz order from bit 0. The left mask is 14 and the
+right mask is 0. `valid` checks the current ELM samples. It does not indicate
+calibration or make the zero-filled fields measurements. The existing
+`/dynamic_joint_states` and `/g5_plot/dynamic_joint_states` carry these states.
+
+On 2026-11-26 with the G5 first and the ELM last, inhibited 60-second
+checks logged zero incomplete G5 PDO cycles both without ELM acquisition
+(60,054 OP cycles) and with it (60,266). All three devices reached OP in
+the combined run. The sampled working counters were 3/3 and 1/1. X2 and
+X3 varied while X1 held at 0 and showed underrange. The bus returned to
+PREOP with no G5 alarm.
+
 ## Calibration and balance
 
 The C++ `calibration_controller` claims the enabled `*_motor/velocity` interfaces

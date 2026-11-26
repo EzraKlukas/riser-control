@@ -189,5 +189,25 @@ int main(int argc, char **argv) {
       if (result)
         return result;
     }
+  riser_hardware::Elm3604 elm;
+  elm.domain = &domain;
+  elm.slave = &slaves[0];
+  elm.data = domain.bytes.data();
+  elm.status = {0, 8, 16};
+  elm.sample = {4, 12, 20};
+  complete = true;
+  for (unsigned i = 0; i < elm.sample.size(); ++i) {
+    EC_WRITE_U16(domain.bytes.data() + elm.status[i], 1);
+    EC_WRITE_S32(domain.bytes.data() + elm.sample[i], -10 + static_cast<int>(i));
+  }
+  elm.read(true);
+  for (const auto offset : elm.status)
+    EC_WRITE_U16(domain.bytes.data() + offset, 0x4001);
+  elm.read(true);
+  if (elm.valid != 1 || elm.left != std::array<double, 6>{0, -8, -9, -10, 0, 0})
+    return 9;
+  elm.read(true);
+  if (elm.valid != 0)
+    return 10;
   rclcpp::shutdown();
 }
