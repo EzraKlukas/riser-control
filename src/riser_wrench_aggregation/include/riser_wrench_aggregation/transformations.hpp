@@ -38,10 +38,12 @@ inline Vector3 matrix_x_vector(const Vector3 &v, const Matrix3 &matrix) {
 inline void plate_to_ankle(Wrench &ankle, const Wrench &left,
                            const Wrench &right, const Vector3 &ankle_to_left,
                            const Vector3 &ankle_to_right) {
-  ankle.force = sum({left.force, right.force});
-  ankle.torque = sum({cross_product(ankle_to_left, left.force),
-                      cross_product(ankle_to_right, right.force), left.torque,
-                      right.torque});
+  /*
+ankle.force = sum({left.force, right.force});
+ankle.torque = sum({cross_product(ankle_to_left, left.force),
+                    cross_product(ankle_to_right, right.force), left.torque,
+                    right.torque});
+                    */
 }
 
 inline void apply_matrix_transform(Wrench &wrench, const Matrix3 &transform) {

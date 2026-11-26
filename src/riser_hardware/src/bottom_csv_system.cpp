@@ -279,7 +279,9 @@ public:
           (cycle_ns_ != 1000000 ||
            !ecrt_master_slave_config(master_, 0, coupler_position_,
                                      Elm3604::vendor, Elm3604::coupler) ||
-           !elm_.configure(master_, terminal_position_)))
+           !elm_.configure(master_, terminal_position_,
+                           info_.hardware_parameters.at("elm_left_matrix"),
+                           info_.hardware_parameters.at("elm_gain_excitation"))))
         throw std::runtime_error("Cannot configure the ELM3604 input domain");
       if (ecrt_master_activate(master_) || !(data_ = ecrt_domain_data(domain_)))
         throw std::runtime_error("master activation failed");

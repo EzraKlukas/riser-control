@@ -154,6 +154,25 @@ def setup(context):
             for key in ("position", "serial", "alias"):
                 values[name + "_motor_" + key] = str(axis[key])
     if LaunchConfiguration("force_plates").perform(context) == "true":
+        calibration_file = (
+            Path(get_package_share_directory("riser_bringup"))
+            / "config/force_plate_wrench_calibration.yaml"
+        )
+        calibration = yaml.safe_load(calibration_file.read_text())
+        serial = str(calibration["plates"]["left"]["serial_number"])
+        bridge = calibration["bridge_calibration"]
+        matrix = bridge["inverse_sensitivity_si_by_serial"][serial]
+        if len(matrix) != 6 or any(len(row) != 6 for row in matrix):
+            raise ValueError("Left force-plate calibration requires a 6 × 6 matrix")
+        values["elm_left_matrix"] = " ".join(str(value) for row in matrix for value in row)
+        gains, excitation = bridge["msa6_gain"], bridge["msa6_excitation_v"]
+        if len(gains) != 3 or len(excitation) != 3 or any(
+            not isfinite(value) or value <= 0 for value in [*gains, *excitation]
+        ):
+            raise ValueError("MSA-6 gain and excitation need three positive values each")
+        values["elm_gain_excitation"] = " ".join(
+            str(gain * volts) for gain, volts in zip(gains, excitation)
+        )
         for side in ("left", "right"):
             fields = "force.x force.y force.z torque.x torque.y torque.z live_mask valid"
             interfaces = "".join(

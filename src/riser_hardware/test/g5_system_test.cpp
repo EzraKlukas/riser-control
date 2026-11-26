@@ -93,6 +93,12 @@ int ecrt_master_sync_reference_clock(ec_master_t *) { return 0; }
 int ecrt_master_sync_slave_clocks(ec_master_t *) { return 0; }
 int ecrt_domain_queue(ec_domain_t *) { return 0; }
 int ecrt_master_send(ec_master_t *) { return 0; }
+int ecrt_slave_config_sdo8(ec_slave_config_t *, uint16_t, uint8_t, uint8_t) {
+  return 0;
+}
+int ecrt_slave_config_sdo16(ec_slave_config_t *, uint16_t, uint8_t, uint16_t) {
+  return 0;
+}
 
 int exercise(unsigned enabled, bool inhibited) {
   using Callback = hardware_interface::CallbackReturn;
@@ -195,6 +201,12 @@ int main(int argc, char **argv) {
   elm.data = domain.bytes.data();
   elm.status = {0, 8, 16};
   elm.sample = {4, 12, 20};
+  elm.uv_per_v_per_count = {.5, .25, 2.};
+  elm.matrix[0][3] = 2.;
+  elm.matrix[1][1] = 1.;
+  elm.matrix[2][2] = 1.;
+  elm.matrix[3][3] = 1.;
+  elm.matrix[4][0] = 7.; // Unwired Fx input is zero.
   complete = true;
   for (unsigned i = 0; i < elm.sample.size(); ++i) {
     EC_WRITE_U16(domain.bytes.data() + elm.status[i], 1);
@@ -204,7 +216,8 @@ int main(int argc, char **argv) {
   for (const auto offset : elm.status)
     EC_WRITE_U16(domain.bytes.data() + offset, 0x4001);
   elm.read(true);
-  if (elm.valid != 1 || elm.left != std::array<double, 6>{0, -8, -9, -10, 0, 0})
+  if (elm.valid != 1 ||
+      elm.left != std::array<double, 6>{-10, -16, -2.25, -5, 0, 0})
     return 9;
   elm.read(true);
   if (elm.valid != 0)

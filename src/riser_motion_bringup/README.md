@@ -75,15 +75,20 @@ For maintenance, deactivate command owners and complete the ordered PREOP shutdo
 
 Add `force_plates:=true` to the EtherCAT launch. For a feedback-only
 checkout, leave `commissioning_disabled:=1`. The ELM uses a separate input
-domain with its existing one-sample PDO maps and electrical settings.
+domain with its existing one-sample PDO maps. X1–X3 use DC-coupled
+0–10 V Extended Range with IEPE bias off.
 Connect the G5 output to the EK1100 port marked X1 IN.
 
-The left plate publishes X1 as `torque.x`, X2 as `force.z`, and X3 as
-`force.y`. These three values are signed ADC counts pending calibration.
-The other nine wrench fields publish zero. Each plate's `live_mask` encodes
-wiring in Fx, Fy, Fz, Mx, My, Mz order from bit 0. The left mask is 14 and the
-right mask is 0. `valid` checks the current ELM samples. It does not indicate
-calibration or make the zero-filled fields measurements. The existing
+X1, X2 and X3 fill the left plate's Mx, Fz and Fy inputs respectively.
+The other inputs are zero. Counts are converted to µV/V using
+`counts × 1.28 / (gain × excitation volts)` before applying the left
+inverse-sensitivity matrix. The MSA-6 gain and excitation entries in
+`force_plate_wrench_calibration.yaml` are provisional jumper settings in
+X1, X2, X3 order. The read publishes all six results about the factory
+transducer origin. Cross-terms can produce nonzero outputs for unwired
+axes. The right wrench is zero. Each plate's `live_mask`
+encodes wiring in Fx, Fy, Fz, Mx, My, Mz order from bit 0. The left mask is
+14 and the right mask is 0. `valid` checks the ELM samples. The existing
 `/dynamic_joint_states` and `/g5_plot/dynamic_joint_states` carry these states.
 
 On 2026-11-26 with the G5 first and the ELM last, inhibited 60-second
