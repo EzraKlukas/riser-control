@@ -132,7 +132,8 @@ def setup(context):
             for key in states
         )
         resources.append(
-            f'<joint name="{joint}"><command_interface name="velocity"/>'
+            f'<joint name="{joint}"><param name="velocity_limit">{speed_cap}</param>'
+            '<command_interface name="velocity"/>'
             '<command_interface name="calibration_midpoint"/>'
             f'<command_interface name="calibration_half_travel"/>{interfaces}</joint>'
         )
@@ -158,6 +159,9 @@ def setup(context):
             for key in ("position", "serial", "alias"):
                 values[name + "_motor_" + key] = str(axis[key])
     if backend == "real" and "bottom" in enabled:
+        angular_speed_cap = float(profile.get("footplate_rate_multiplier", 10.0)) * speed_cap
+        if not isfinite(angular_speed_cap) or angular_speed_cap <= 0:
+            raise ValueError("Invalid footplate angular speed cap")
         model = (
             Path(get_package_share_directory("riser_bringup"))
             / "urdf/model/kinematics.yaml"
@@ -172,7 +176,7 @@ def setup(context):
             '<joint name="foot_plate_pitch" type="revolute">'
             f'<parent link="base"/><child link="foot_platform"/><axis xyz="{axis}"/>'
             f'<limit lower="{lower}" upper="{upper}" '
-            f'velocity="{pitch["velocity"]}" effort="{pitch["effort"]}"/></joint>'
+            f'velocity="{angular_speed_cap}" effort="{pitch["effort"]}"/></joint>'
         )
         direction = LaunchConfiguration("footplate_direction").perform(context)
         gain = float(LaunchConfiguration("footplate_position_gain_s_inv").perform(context))
@@ -186,7 +190,7 @@ def setup(context):
         values.update(
             footplate_lower_rad=str(pitch["lower"]),
             footplate_upper_rad=str(pitch["upper"]),
-            footplate_rate_rad_s=str(pitch["velocity"]),
+            footplate_rate_rad_s=str(angular_speed_cap),
             footplate_direction=direction,
             footplate_position_gain_s_inv=str(gain),
         )
@@ -195,7 +199,7 @@ def setup(context):
         resources.append(
             f'<joint name="foot_plate_pitch">{position_command}{velocity_command}'
             f'<param name="lower">{lower}</param><param name="upper">{upper}</param>'
-            f'<param name="velocity_limit">{pitch["velocity"]}</param>'
+            f'<param name="velocity_limit">{angular_speed_cap}</param>'
             '<state_interface name="position"/>'
             '<state_interface name="velocity"/><state_interface name="valid"/>'
             '<state_interface name="reverse_limit"/><state_interface name="forward_limit"/></joint>'

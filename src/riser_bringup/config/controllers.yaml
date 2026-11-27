@@ -99,6 +99,6 @@ ankle_wrench_plot_broadcaster:
 inverted_pendulum:
   ros__parameters:
     mode: footplate
-    max_rate_rad_s: 0.10
+    max_rate_rad_s: 0.0  # Use the selected joint's angular rate limit.
     lower_pendulum_angle_rad: -0.06
     upper_pendulum_angle_rad: 0.06

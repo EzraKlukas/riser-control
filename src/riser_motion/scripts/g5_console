@@ -31,6 +31,7 @@ from riser_motion.srv import Jog
 class Console(W.QWidget):
     cap_names = (
         "max_velocity_m_s",
+        "max_velocity_rad_s",
         "max_duration_s",
         "ramp_s",
         "max_acceleration_m_s2",
@@ -58,6 +59,7 @@ class Console(W.QWidget):
         self.resize(960, 780)
         self.host = host
         self.command_interfaces = set()
+        self.velocity_limits = {}
         self.previewed = None
         self.pending_preview = None
         self.gazebo = False
@@ -256,6 +258,12 @@ class Console(W.QWidget):
             for resource in control
             if resource.tag in ("joint", "gpio")
             for iface in resource.findall("command_interface")
+        }
+        self.velocity_limits = {
+            resource.get("name"): float(limit)
+            for resource in control
+            if resource.tag in ("joint", "gpio")
+            if (limit := resource.findtext("param[@name='velocity_limit']")) is not None
         }
         hw = control.find("hardware")
         if hw is None:
@@ -516,22 +524,29 @@ class Console(W.QWidget):
             self.caps.clear()
         caps = self.caps.get(name)
         unit = "rad" if self.is_angular() else "m"
-        key = f"{self.axis.currentText()}/{self.command_mode.currentText()}"
+        axis = self.axis.currentText()
+        key = f"{axis}/{self.command_mode.currentText()}"
+        master_speed = self.velocity_limits.get(axis)
+        if caps and master_speed is not None:
+            speed_key = "max_velocity_rad_s" if self.is_angular() else "max_velocity_m_s"
+            profile_speed = caps[speed_key]
+            speed = min(master_speed, profile_speed) if profile_speed > 0 else master_speed
         if key not in self.command_interfaces:
             self.budget.setText(f"Unavailable command interface {key}")
-        elif caps and self.axis.currentText() == "foot_plate_pitch":
+        elif not caps or master_speed is None:
+            self.budget.setText("Unavailable")
+        elif axis == "foot_plate_pitch":
             self.budget.setText(
+                f"{speed:.4g} rad/s, "
                 f"{caps['footplate_lower_rad']:.4g} to {caps['footplate_upper_rad']:.4g} rad, "
                 f"{caps['max_duration_s']:.4g} s max"
             )
-        elif caps:
+        else:
             self.budget.setText(
-                f"{caps['max_velocity_m_s']:.4g} {unit}/s, {caps['max_duration_s']:.4g} s, "
+                f"{speed:.4g} {unit}/s, {caps['max_duration_s']:.4g} s, "
                 f"{caps['ramp_s']:.4g} s ramp, {caps['max_acceleration_m_s2']:.4g} {unit}/s², "
                 f"{caps['max_travel_m']:.4g} {unit}"
             )
-        else:
-            self.budget.setText("Unavailable")
         if client.service_is_ready():
             request = GetParameters.Request(names=list(self.cap_names))
             self.cap_request = name, time.monotonic(), client.call_async(request)

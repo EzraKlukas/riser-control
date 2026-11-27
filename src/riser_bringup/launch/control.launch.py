@@ -103,6 +103,7 @@ def setup(context):
         if balance_axis is None or balance_axis in available:
             inactive.append("inverted_pendulum")
         types = motion_config["controller_manager"]["ros__parameters"]
+        profile_speed_m_s = 0.03
         for joint, profile in [
             ("bottom_motor", "motor_profile"), ("top_motor", "top_profile"),
             ("torso_motor", "torso_profile"), ("hip_motor", "hip_profile"),
@@ -121,7 +122,11 @@ def setup(context):
                     read_time_interface="RiserSystem/read_time",
                 )
                 if joint != "foot_plate_pitch":
-                    params.update(max_velocity_m_s=.03, max_travel_m=.05, max_acceleration_m_s2=.12)
+                    if joint.endswith("_motor"):
+                        params["max_velocity_m_s"] = profile_speed_m_s
+                    else:
+                        params["max_velocity_rad_s"] = 10 * profile_speed_m_s
+                    params.update(max_travel_m=.05, max_acceleration_m_s2=.12)
                 inactive.append(name)
     if masked:
         for name in ("riser_position_controller", "riser_velocity_controller",

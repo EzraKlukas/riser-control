@@ -2,6 +2,7 @@
 #include "riser_inverted_pendulum/inverted_pendulum_logic.hpp"
 #include <controller_interface/controller_interface_base.hpp>
 #include <hardware_interface/component_parser.hpp>
+#include <hardware_interface/introspection.hpp>
 #include <pluginlib/class_list_macros.hpp>
 #include <rclcpp/logging.hpp>
 
@@ -10,20 +11,25 @@ using Callback = controller_interface::CallbackReturn;
 using Result = controller_interface::return_type;
 
 namespace {
-double angle_rate_limit(const std::string &description, const std::string &joint_name) {
+double angle_rate_limit(const std::string &description,
+                        const std::string &joint_name) {
   for (const auto &component :
        hardware_interface::parse_control_resources_from_urdf(description)) {
     for (const auto &joint : component.joints) {
       if (joint.name != joint_name)
         continue;
       const auto has = [](const auto &interfaces, const char *name) {
-        return std::any_of(interfaces.begin(), interfaces.end(),
-                           [name](const auto &iface) { return iface.name == name; });
+        return std::any_of(
+            interfaces.begin(), interfaces.end(),
+            [name](const auto &iface) { return iface.name == name; });
       };
       if (!has(joint.command_interfaces, "velocity") ||
           !std::all_of(JointInterfaceNames.begin(), JointInterfaceNames.end(),
-                       [&](const auto *name) { return has(joint.state_interfaces, name); }))
-        throw std::invalid_argument("Missing calibrated angular velocity contract for " + joint_name);
+                       [&](const auto *name) {
+                         return has(joint.state_interfaces, name);
+                       }))
+        throw std::invalid_argument(
+            "Missing calibrated angular velocity contract for " + joint_name);
       const double rate = std::stod(joint.parameters.at("velocity_limit"));
       if (std::isfinite(rate) && rate > 0.)
         return rate;
@@ -31,8 +37,7 @@ double angle_rate_limit(const std::string &description, const std::string &joint
           "Invalid angular velocity_limit in robot description");
     }
   }
-  throw std::invalid_argument(
-      "Missing angular resource " + joint_name);
+  throw std::invalid_argument("Missing angular resource " + joint_name);
 }
 } // namespace
 
@@ -78,10 +83,13 @@ Callback InvertedPendulumController::on_init() {
           }
           for (const auto &parameter : parameters) {
             if (parameter.get_name() == "mass" &&
-                (parameter.get_type() != rclcpp::ParameterType::PARAMETER_DOUBLE ||
-                 !std::isfinite(parameter.as_double()) || parameter.as_double() < 0.)) {
+                (parameter.get_type() !=
+                     rclcpp::ParameterType::PARAMETER_DOUBLE ||
+                 !std::isfinite(parameter.as_double()) ||
+                 parameter.as_double() < 0.)) {
               result.successful = false;
-              result.reason = "mass must be a finite nonnegative number in kilograms";
+              result.reason =
+                  "mass must be a finite nonnegative number in kilograms";
               break;
             }
           }
@@ -134,17 +142,19 @@ InvertedPendulumController::on_configure(const rclcpp_lifecycle::State &) {
     if (!std::isfinite(requested_rate) || requested_rate < 0.)
       throw std::invalid_argument(
           "max_rate_rad_s must be finite and nonnegative");
-    const double model_rate = angle_rate_limit(get_robot_description(), joint_name_);
-    parameters.max_rate_rad_s =
-        requested_rate == 0. ? model_rate
-                             : std::min(requested_rate, model_rate);
+    const double model_rate =
+        angle_rate_limit(get_robot_description(), joint_name_);
+    parameters.max_rate_rad_s = requested_rate == 0.
+                                    ? model_rate
+                                    : std::min(requested_rate, model_rate);
     parameters.is_male = node->get_parameter("is_male").as_bool();
+    // REGISTER_ROS2_CONTROL_INTROSPECTION("pendulum_torque", torque_out_);
     if (const auto *error = logic_.configure(parameters)) {
       RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
       return Callback::ERROR;
     }
-    RCLCPP_INFO(node->get_logger(), "%s velocity cap %.6f rad/s", joint_name_.c_str(),
-                parameters.max_rate_rad_s);
+    RCLCPP_INFO(node->get_logger(), "%s velocity cap %.6f rad/s",
+                joint_name_.c_str(), parameters.max_rate_rad_s);
   } catch (const std::exception &error) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error.what());
     return Callback::ERROR;
@@ -203,30 +213,36 @@ InvertedPendulumController::on_activate(const rclcpp_lifecycle::State &) {
     wrench_interface_.handles[component] = &*found;
   }
   if (!read_time_name_.empty()) {
-    const auto found = std::find_if(
-        state_interfaces_.begin(), state_interfaces_.end(),
-        [&](const auto &interface) { return interface.get_name() == read_time_name_; });
+    const auto found =
+        std::find_if(state_interfaces_.begin(), state_interfaces_.end(),
+                     [&](const auto &interface) {
+                       return interface.get_name() == read_time_name_;
+                     });
     if (found == state_interfaces_.end()) {
       reset();
       return Callback::ERROR;
     }
     read_time_ = &*found;
-    previous_read_time_s_ = read_time_->get_optional(1).value_or(logic::Unavailable);
+    previous_read_time_s_ =
+        read_time_->get_optional(1).value_or(logic::Unavailable);
   }
 
   if (angle_.state_handles[CALIBRATED]->get_optional(1).value_or(0) != 1) {
-    RCLCPP_ERROR(get_node()->get_logger(), "%s is not calibrated", joint_name_.c_str());
+    RCLCPP_ERROR(get_node()->get_logger(), "%s is not calibrated",
+                 joint_name_.c_str());
     reset();
     return Callback::FAILURE;
   }
   if (!send_command(0.)) {
-    RCLCPP_ERROR(get_node()->get_logger(), "Could not initialize angular velocity command");
+    RCLCPP_ERROR(get_node()->get_logger(),
+                 "Could not initialize angular velocity command");
     reset();
     return Callback::ERROR;
   }
   double mass = mass_override_kg_.load();
   if (mass == 0.)
-    mass = wrench_interface_.handles[MASS]->get_optional(1).value_or(logic::Unavailable);
+    mass = wrench_interface_.handles[MASS]->get_optional(1).value_or(
+        logic::Unavailable);
   if (const auto *error = logic_.activate(mass)) {
     RCLCPP_ERROR(get_node()->get_logger(), "%s", error);
     reset();
@@ -275,8 +291,10 @@ bool InvertedPendulumController::read_inputs(logic::Inputs &inputs) const {
     return false;
   inputs.angle.position = *position;
   inputs.angle.velocity = *velocity;
-  inputs.reverse_limit = angle_.state_handles[REVERSE]->get_optional(1).value_or(1) != 0;
-  inputs.forward_limit = angle_.state_handles[FORWARD]->get_optional(1).value_or(1) != 0;
+  inputs.reverse_limit =
+      angle_.state_handles[REVERSE]->get_optional(1).value_or(1) != 0;
+  inputs.forward_limit =
+      angle_.state_handles[FORWARD]->get_optional(1).value_or(1) != 0;
   return read_torque(inputs.ankle_wrench);
 }
 
@@ -304,7 +322,8 @@ Result InvertedPendulumController::update(const rclcpp::Time &time,
   // call logic update function with latest state update.
   double dt = period.seconds();
   if (read_time_) {
-    const double acquired = read_time_->get_optional(1).value_or(logic::Unavailable);
+    const double acquired =
+        read_time_->get_optional(1).value_or(logic::Unavailable);
     dt = acquired - previous_read_time_s_;
     previous_read_time_s_ = acquired;
   }

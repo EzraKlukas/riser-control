@@ -22,7 +22,11 @@ namespace {
 constexpr uint32_t kOmronVendor = 0x00000083;
 constexpr uint32_t kRotaryG5Product = 0x00000004; // R88D-KN04L-ECT
 constexpr char kFootplate[] = "foot_plate_pitch";
-enum BottomCommand : unsigned { Linear = 1, PitchPosition = 2, PitchVelocity = 4 };
+enum BottomCommand : unsigned {
+  Linear = 1,
+  PitchPosition = 2,
+  PitchVelocity = 4
+};
 
 unsigned bottom_commands(const std::vector<std::string> &keys) {
   unsigned modes = 0;
@@ -45,7 +49,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
   uint8_t *data_ = nullptr;
   std::vector<G5Axis> axes_;
   FootplatePitch pitch_;
-  bool has_pitch_ = false, has_pitch_position_ = false, has_pitch_velocity_ = false;
+  bool has_pitch_ = false, has_pitch_position_ = false,
+       has_pitch_velocity_ = false;
   std::atomic<bool> pitch_valid_{false};
   double read_time_s_ = NAN;
   rclcpp::Clock acquisition_clock_{RCL_SYSTEM_TIME};
@@ -122,10 +127,9 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
                            enabled});
     }
     validate_topology(addresses, detected, peripherals);
-    if (force_plates_ &&
-        (coupler < 0 || terminal != coupler + 1 ||
-         (elm_.domain && (coupler != coupler_position_ ||
-                          terminal != terminal_position_))))
+    if (force_plates_ && (coupler < 0 || terminal != coupler + 1 ||
+                          (elm_.domain && (coupler != coupler_position_ ||
+                                           terminal != terminal_position_))))
       throw std::runtime_error(
           "Expected the EK1100 followed by the ELM3604-0002");
     coupler_position_ = coupler;
@@ -138,9 +142,9 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
       const auto found =
           std::find_if(addresses.begin(), addresses.end(),
                        [&](const auto &a) { return a.name == name; });
-      excluded_discovered_[i] =
-          found != addresses.end() && found->ring < detected.size() &&
-          !peripherals.count(found->ring);
+      excluded_discovered_[i] = found != addresses.end() &&
+                                found->ring < detected.size() &&
+                                !peripherals.count(found->ring);
     }
   }
   static bool is_force_plate(const std::string &name) {
@@ -174,8 +178,8 @@ class BottomCsvSystem final : public hardware_interface::SystemInterface {
       if (reference || slaves)
         a.guard_.trip();
       if (!stopping && mode > Linear && a.name == "bottom_motor")
-        a.command_ =
-            pitch_.carriage_command(mode == PitchPosition, a.position_, speed_limit_);
+        a.command_ = pitch_.carriage_command(mode == PitchPosition, a.position_,
+                                             speed_limit_);
       a.stage(data_, commissioning_disabled_, stopping, speed_limit_,
               velocity_scale_);
     }
@@ -286,8 +290,10 @@ public:
     std::vector<hardware_interface::CommandInterface> result;
     for (auto &a : axes_) {
       result.emplace_back(a.name, "velocity", &a.command_);
-      result.emplace_back(a.name, "calibration_midpoint", &a.calibration_midpoint);
-      result.emplace_back(a.name, "calibration_half_travel", &a.calibration_half_travel);
+      result.emplace_back(a.name, "calibration_midpoint",
+                          &a.calibration_midpoint);
+      result.emplace_back(a.name, "calibration_half_travel",
+                          &a.calibration_half_travel);
     }
     if (has_pitch_) {
       if (has_pitch_position_)
@@ -324,8 +330,8 @@ public:
       if (has_pitch_velocity_ &&
           !pitch_.configure(
               {number("footplate_lower_rad"), number("footplate_upper_rad")},
-              number("footplate_rate_rad_s"),
-              number("footplate_direction"), number("footplate_position_gain_s_inv")))
+              number("footplate_rate_rad_s"), number("footplate_direction"),
+              number("footplate_position_gain_s_inv")))
         throw std::invalid_argument("Invalid footplate calibration");
       master_ = ecrt_request_master(integer("master_index"));
       if (!master_)
@@ -350,9 +356,10 @@ public:
           (cycle_ns_ != 1000000 ||
            !ecrt_master_slave_config(master_, 0, coupler_position_,
                                      Elm3604::vendor, Elm3604::coupler) ||
-           !elm_.configure(master_, terminal_position_,
-                           info_.hardware_parameters.at("elm_left_matrix"),
-                           info_.hardware_parameters.at("elm_gain_excitation"))))
+           !elm_.configure(
+               master_, terminal_position_,
+               info_.hardware_parameters.at("elm_left_matrix"),
+               info_.hardware_parameters.at("elm_gain_excitation"))))
         throw std::runtime_error("Cannot configure the ELM3604 input domain");
       if (ecrt_master_activate(master_) || !(data_ = ecrt_domain_data(domain_)))
         throw std::runtime_error("master activation failed");
@@ -450,7 +457,8 @@ public:
       return result;
     const unsigned incoming = bottom_commands(start);
     const unsigned outgoing = bottom_commands(stop);
-    if (incoming > Linear && std::any_of(axes_.begin(), axes_.end(), [](const auto &a) {
+    if (incoming > Linear &&
+        std::any_of(axes_.begin(), axes_.end(), [](const auto &a) {
           return a.name == "bottom_motor" && !a.ready_;
         }))
       return hardware_interface::return_type::ERROR;
@@ -507,7 +515,8 @@ public:
     const double dt = std::chrono::duration<double>(interval).count();
     last_ = now;
     const int receive_result = ecrt_master_receive(master_);
-    const double acquired_s = force_plates_ ? acquisition_clock_.now().seconds() : 0.;
+    const double acquired_s =
+        force_plates_ ? acquisition_clock_.now().seconds() : 0.;
     const int process_result = ecrt_domain_process(domain_);
     ec_domain_state_t domain{};
     const int domain_result = ecrt_domain_state(domain_, &domain);
@@ -528,16 +537,21 @@ public:
       if (has_pitch_ && a.name == "bottom_motor") {
         // A reset or wrap can change the encoder coordinate while the PDOs
         // still look healthy. Include room for adjacent PDO timing and counts.
-        const double max_step = 2 * speed_limit_ * std::max(dt, cycle_ns_ * 1e-9) +
-                                4 / position_scale_;
+        const double max_step =
+            2 * speed_limit_ * std::max(dt, cycle_ns_ * 1e-9) +
+            4 / position_scale_;
         const bool reference_continuous =
-            !pitch_.homed || std::abs(a.position_ - previous_position) <= max_step;
-        const bool healthy = a.feedback_valid && !a.guard_.fault() && reference_continuous;
+            !pitch_.homed ||
+            std::abs(a.position_ - previous_position) <= max_step;
+        const bool healthy =
+            a.feedback_valid && !a.guard_.fault() && reference_continuous;
         if (!healthy)
           a.calibration_midpoint = NAN;
         if (a.calibrating)
-          pitch_.establish_reference(a.calibration_midpoint, a.calibration_half_travel);
-        pitch_.read(healthy, a.position_, a.velocity_, a.reverse_limit_, a.forward_limit_);
+          pitch_.establish_reference(a.calibration_midpoint,
+                                     a.calibration_half_travel);
+        pitch_.read(healthy, a.position_, a.velocity_, a.reverse_limit_,
+                    a.forward_limit_);
         pitch_valid_.store(pitch_.valid == 1);
       }
     }

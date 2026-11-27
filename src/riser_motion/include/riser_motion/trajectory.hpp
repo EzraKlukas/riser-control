@@ -39,7 +39,7 @@ inline std::vector<Waypoint> parse_trajectory(
         !std::isfinite(next.value) || next.time > duration_cap)
       throw std::invalid_argument("Invalid or out-of-budget CSV row " +
                                   std::to_string(samples.size() + 2));
-    if (!limits.position_envelope && !position && std::abs(next.value) > speed_cap)
+    if (!position && std::abs(next.value) > speed_cap)
       throw std::invalid_argument("CSV velocity cap exceeded");
     if (samples.empty()) {
       if (next.time != 0 || next.value != 0)
@@ -50,15 +50,16 @@ inline std::vector<Waypoint> parse_trajectory(
       const double change = next.value - previous.value;
       if (!(dt > 0))
         throw std::invalid_argument("CSV time must increase strictly");
+      const double rate = std::abs(change / dt);
+      if (position && 1.5 * rate > speed_cap)
+        throw std::invalid_argument("CSV position segment speed exceeds cap");
       if (!limits.position_envelope) {
-        const double rate = change / dt;
         if (position) {
-          if (1.5 * std::abs(rate) > speed_cap ||
-              6 * std::abs(rate) / dt > limits.max_acceleration)
-            throw std::invalid_argument("CSV position segment speed or acceleration exceeds cap");
+          if (6 * rate / dt > limits.max_acceleration)
+            throw std::invalid_argument("CSV position segment acceleration exceeds cap");
           distance += std::abs(change);
         } else {
-          if (std::abs(rate) > limits.max_acceleration)
+          if (rate > limits.max_acceleration)
             throw std::invalid_argument("CSV acceleration cap exceeded");
           distance += (std::abs(previous.value) + std::abs(next.value)) * dt / 2;
         }

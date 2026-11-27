@@ -40,7 +40,7 @@ int main() {
     dense_csv << time << ',' << rate << "          \r\n";
   }
   const auto dense = dense_csv.str();
-  Trajectory oscillation{footplate, parse_trajectory(dense, false, footplate, 0., 60.)};
+  Trajectory oscillation{footplate, parse_trajectory(dense, false, footplate, 1., 60.)};
   oscillation.measure_position_offsets(false);
   const auto &envelope = *footplate.position_envelope;
   if (dense.size() <= 3 * 1024 * 1024 || oscillation.samples.size() != 60001 ||
@@ -50,17 +50,27 @@ int main() {
     return 1;
 
   Trajectory reversing{footplate, parse_trajectory(
-      "time_s,velocity\n0,0\n0.1,1\n1.1,-1\n1.2,0", false, footplate, 0., 60.)};
+      "time_s,velocity\n0,0\n0.1,1\n1.1,-1\n1.2,0", false, footplate, 1., 60.)};
   reversing.measure_position_offsets(false);
   if (std::abs(reversing.max_offset - 0.3) > 1e-9 ||
       envelope.contains(0., reversing.min_offset, reversing.max_offset))
     return 1;
 
-  Trajectory steep{footplate, parse_trajectory(
-      "time_s,position\n0,0\n0.001,0.18\n0.002,-0.18", true, footplate, 0., 60.)};
-  steep.measure_position_offsets(true);
-  if (!envelope.contains(0., steep.min_offset, steep.max_offset) ||
-      envelope.contains(0.001, steep.min_offset, steep.max_offset))
+  for (const bool position_mode : {false, true}) {
+    const char *too_fast = position_mode
+        ? "time_s,position\n0,0\n0.1,0.15"
+        : "time_s,velocity\n0,0\n0.1,1.5\n0.2,0";
+    try {
+      parse_trajectory(too_fast, position_mode, footplate, 1., 60.);
+      return 1;
+    } catch (const std::invalid_argument &) {
+    }
+  }
+  Trajectory full_travel{footplate, parse_trajectory(
+      "time_s,position\n0,0\n1,0.18\n2,-0.18", true, footplate, 1., 60.)};
+  full_travel.measure_position_offsets(true);
+  if (!envelope.contains(0., full_travel.min_offset, full_travel.max_offset) ||
+      envelope.contains(0.001, full_travel.min_offset, full_travel.max_offset))
     return 1;
 
   assert(parse("time_s,velocity\n0,0\n0.001,0.00001\n0.002,0", false).size() == 3);
@@ -91,7 +101,7 @@ int main() {
     return 1;
   const auto rate_at = [&](double angle) {
     near_limit.position = angle;
-    return playback.update(oscillation, false, near_limit, 0., .004, 0, 0,
+    return playback.update(oscillation, false, near_limit, 1., .004, 0, 0,
                            request.token, 0, now, now);
   };
   if (rate_at(.18) != 0. || rate_at(.18) != 0. || !playback.running())

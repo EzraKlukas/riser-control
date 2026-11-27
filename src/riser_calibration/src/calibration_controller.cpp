@@ -31,7 +31,8 @@ controller_interface::InterfaceConfiguration
 CalibrationController::command_interface_configuration() const {
   std::vector<std::string> names;
   for (const auto i : enabled_)
-    for (const auto *type : {"velocity", "calibration_midpoint", "calibration_half_travel"})
+    for (const auto *type :
+         {"velocity", "calibration_midpoint", "calibration_half_travel"})
       names.push_back(joint_names_[i] + "/" + type);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
@@ -83,6 +84,7 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
         interfaces.begin(), interfaces.end(),
         [name](const auto &iface) { return iface.name == name; });
   };
+  double speed_cap = get_node()->get_parameter("max_velocity_m_s").as_double();
   for (std::size_t i = 0; i < joint_names_.size(); ++i) {
     for (const auto &component : hardware) {
       for (const auto *resources : {&component.joints, &component.gpios}) {
@@ -103,6 +105,16 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
                          axis.name.c_str());
             return Callback::ERROR;
           }
+          try {
+            const double master_speed = std::stod(axis.parameters.at("velocity_limit"));
+            if (!std::isfinite(master_speed) || master_speed <= 0)
+              throw std::invalid_argument("velocity_limit must be positive and finite");
+            speed_cap = std::min(speed_cap, master_speed);
+          } catch (const std::exception &error) {
+            RCLCPP_ERROR(get_node()->get_logger(), "Invalid velocity_limit for %s: %s",
+                         axis.name.c_str(), error.what());
+            return Callback::ERROR;
+          }
           enabled_.push_back(i);
         }
       }
@@ -114,8 +126,6 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
         "No linear actuator velocity interfaces in the robot description");
     return Callback::ERROR;
   }
-  const double speed_cap =
-      get_node()->get_parameter("max_velocity_m_s").as_double();
   speed_m_s_ = get_node()->get_parameter("speed_m_s").as_double();
   max_travel_m_ = get_node()->get_parameter("max_travel_m").as_double();
   if (!std::isfinite(speed_cap) || !std::isfinite(speed_m_s_) ||
@@ -140,10 +150,13 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
     a.feedback_valid =
         find_interface(state_interfaces_, name + "/feedback_valid");
     a.command = find_interface(command_interfaces_, name + "/velocity");
-    a.midpoint = find_interface(command_interfaces_, name + "/calibration_midpoint");
-    a.half_travel = find_interface(command_interfaces_, name + "/calibration_half_travel");
-    if (!a.midpoint || !a.half_travel || !a.position || !a.velocity || !a.lower_switch || !a.upper_switch ||
-        !a.ready || !a.feedback_valid || !a.command) {
+    a.midpoint =
+        find_interface(command_interfaces_, name + "/calibration_midpoint");
+    a.half_travel =
+        find_interface(command_interfaces_, name + "/calibration_half_travel");
+    if (!a.midpoint || !a.half_travel || !a.position || !a.velocity ||
+        !a.lower_switch || !a.upper_switch || !a.ready || !a.feedback_valid ||
+        !a.command) {
       RCLCPP_ERROR(get_node()->get_logger(), "Missing interface for %s",
                    name.c_str());
       return Callback::ERROR;
@@ -241,7 +254,8 @@ Result CalibrationController::update(const rclcpp::Time &,
                   joint_names_[index].c_str(), a.lower_position);
       a.target_velocity = 0.; // should I stay at zero velocity for a bit?
     } else {
-      if (std::abs(read_state(*a.position) - a.initial_position) > max_travel_m_)
+      if (std::abs(read_state(*a.position) - a.initial_position) >
+          max_travel_m_)
         return fail("reverse switch not found within travel budget");
       a.target_velocity = -speed_m_s_;
     }
@@ -273,7 +287,8 @@ Result CalibrationController::update(const rclcpp::Time &,
   case GOING_HOME:
     if (read_state(*a.position) > a.home) {
       const double remaining = read_state(*a.position) - a.home;
-      a.target_velocity = -std::min(speed_m_s_, std::max(speed_m_s_ * 0.1, remaining * 5));
+      a.target_velocity =
+          -std::min(speed_m_s_, std::max(speed_m_s_ * 0.1, remaining * 5));
     } else {
       a.target_velocity = 0.;
       a.state = SETTLING_AT_HOME;

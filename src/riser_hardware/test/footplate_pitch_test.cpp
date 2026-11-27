@@ -33,6 +33,16 @@ int main() {
           std::abs(position - 2 * polarity * raw.position) > 1e-9)
         return 5;
     }
+    pitch.read(true, midpoint, 0.);
+    pitch.velocity_command = 1.;
+    const double angular_limited = std::abs(pitch.jacobian) * 0.2;
+    if (std::abs(std::abs(pitch.carriage_command(false, midpoint, 1.)) -
+                 angular_limited) > 1e-9)
+      return 8;
+    const double carriage_cap = angular_limited / 2;
+    if (std::abs(pitch.carriage_command(false, midpoint, carriage_cap)) != carriage_cap)
+      return 9;
+
     pitch.read(true, midpoint, 0., 0., 1.);
     if (pitch.forward_limit != (polarity > 0) ||
         pitch.reverse_limit != (polarity < 0))

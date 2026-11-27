@@ -63,6 +63,7 @@ private:
   double previous_read_time_s_ = logic::Unavailable;
   JointInterfaces angle_;
   WrenchInterfaces wrench_interface_;
+  double torque_out_{0.0};
 
   void reset();
 

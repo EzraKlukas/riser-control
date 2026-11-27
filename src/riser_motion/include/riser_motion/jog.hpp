@@ -29,7 +29,7 @@ inline std::string jog_stamp_error(std::chrono::nanoseconds age, int64_t stamp,
 inline std::string jog_limits_error(const Settings &s, double speed_cap,
                                     double duration_cap) {
   const char *reason = profile_error(s);
-  if (!s.position_envelope && std::isfinite(s.speed) && std::abs(s.speed) > speed_cap)
+  if (std::isfinite(s.speed) && std::abs(s.speed) > speed_cap)
     reason = "Velocity cap exceeded";
   else if (std::isfinite(s.duration) && s.duration > duration_cap)
     reason = "Duration cap exceeded";
@@ -104,7 +104,7 @@ public:
         (!caps.position_envelope &&
          (travelled >= caps.max_travel ||
           std::abs(sample.velocity) >
-              3.0 * std::abs(active_.velocity) + kSpeedToleranceMps))) {
+              3.0 * std::abs(active_.velocity) + caps.feedback_speed_tolerance))) {
       stop();
       return 0;
     }

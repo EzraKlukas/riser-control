@@ -8,6 +8,23 @@ int main(int argc, char **argv) {
   controller_interface::ControllerInterfaceParams params;
   params.controller_name = "profile_test";
   params.controller_manager_update_rate = 1000;
+  params.robot_description = R"(<robot name="test">
+    <link name="base"/><link name="carriage"/><link name="backboard"/>
+    <joint name="bottom_motor" type="prismatic">
+      <parent link="base"/><child link="carriage"/>
+      <limit lower="-1" upper="1" effort="0" velocity="0.02"/>
+    </joint>
+    <joint name="backboard_pitch" type="revolute">
+      <parent link="base"/><child link="backboard"/>
+      <limit lower="-1" upper="1" effort="0" velocity="0.04"/>
+    </joint>
+    <ros2_control name="motion_test" type="system">
+      <hardware><plugin>mock_components/GenericSystem</plugin></hardware>
+      <joint name="bottom_motor"><param name="velocity_limit">0.02</param>
+        <command_interface name="velocity"/></joint>
+      <joint name="backboard_pitch"><param name="velocity_limit">0.04</param>
+        <command_interface name="velocity"/></joint>
+    </ros2_control></robot>)";
   if (controller.init(params) != controller_interface::return_type::OK)
     return 1;
   const rclcpp_lifecycle::State state;
@@ -64,6 +81,24 @@ int main(int argc, char **argv) {
   if (controller.on_activate(state) != Callback::ERROR)
     return 8;
   controller.release_interfaces();
+
+  const auto node = controller.get_node();
+  node->set_parameters({
+      rclcpp::Parameter("joint", "backboard_pitch"),
+      rclcpp::Parameter("speed_m_s", .03),
+      rclcpp::Parameter("max_velocity_rad_s", .025),
+  });
+  if (controller.on_configure(state) != Callback::ERROR)
+    return 10;
+  node->set_parameter(rclcpp::Parameter("max_velocity_rad_s", .20));
+  if (controller.on_configure(state) != Callback::SUCCESS)
+    return 11;
+  node->set_parameters({
+      rclcpp::Parameter("speed_m_s", .045),
+      rclcpp::Parameter("duration_s", 3.),
+  });
+  if (controller.on_configure(state) != Callback::ERROR)
+    return 12;
   rclcpp::shutdown();
   return 0;
 }

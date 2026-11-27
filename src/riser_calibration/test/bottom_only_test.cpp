@@ -17,7 +17,7 @@ int main(int argc, char **argv) {
     </joint>
     <ros2_control name="test_hardware" type="system"><hardware>
     <plugin>mock_components/GenericSystem</plugin></hardware>
-    <joint name="bottom_motor">
+    <joint name="bottom_motor"><param name="velocity_limit">0.02</param>
       <command_interface name="velocity"/><command_interface name="calibration_midpoint"/>
       <command_interface name="calibration_half_travel"/><state_interface name="position"/>
       <state_interface name="velocity"/><state_interface name="ready"/>
@@ -28,11 +28,14 @@ int main(int argc, char **argv) {
     return 1;
   const auto node = controller.get_node();
   node->set_parameters({
-      rclcpp::Parameter("max_velocity_m_s", .02),
+      rclcpp::Parameter("max_velocity_m_s", .04),
       rclcpp::Parameter("max_travel_m", .16),
-      rclcpp::Parameter("speed_m_s", .001),
+      rclcpp::Parameter("speed_m_s", .03),
   });
   const rclcpp_lifecycle::State state;
+  if (controller.on_configure(state) != Callback::ERROR)
+    return 2;
+  node->set_parameter(rclcpp::Parameter("speed_m_s", .001));
   if (controller.on_configure(state) != Callback::SUCCESS ||
       controller.command_interface_configuration().names !=
           std::vector<std::string>{"bottom_motor/velocity", "bottom_motor/calibration_midpoint",

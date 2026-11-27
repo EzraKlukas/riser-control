@@ -120,32 +120,39 @@ if (inputs.angle.position <= parameters_.lower_pendulum_angle_rad ||
     */
     const Configuration &c = configuration_;
 
+    const double torque_on_participant = -1.0 * inputs.ankle_wrench.T_x;
+
     // get the actual angle in that we selected for soft limit in place of
     // reverse/forward_limit
     const double theta_b =
         std::clamp(inputs.angle.position, parameters_.lower_pendulum_angle_rad,
-                   parameters_.upper_pendulum_angle_rad);
-    const double alpha = std::abs(inputs.angle.position - theta_b) / 0.0174;
+                   parameters_.upper_pendulum_angle_rad); // 0.02 rad
+    const double alpha =
+        std::clamp(std::abs(inputs.angle.position - theta_b) / 0.0174, 0.,
+                   1.); // linearly increasing once we get above 0.02 rad
 
-    const double s = inputs.angle.position > 0;
+    const double s =
+        2 * (inputs.angle.position > 0) - 1.0; // the sign, is positive, so +1
 
-    const double torque_user = (s * inputs.ankle_wrench.T_x > 0)
-                                   ? (1 - alpha) * inputs.ankle_wrench.T_x
-                                   : inputs.ankle_wrench.T_x;
+    const double torque_user =
+        (s * torque_on_participant > 0)
+            ? (1 - alpha) *
+                  torque_on_participant // negative, much bigger than one
+            : inputs.ankle_wrench.T_x;
 
-    const double w_sign = inputs.angle.velocity > 0;
+    const double w_sign = 2 * (inputs.angle.velocity > 0) - 1;
     const double damping_contribution =
         w_sign * s > 0 ? 15 * s * c.inertia * inputs.angle.velocity : 0.;
 
     const double torque_out =
         torque_user - alpha * (0.971 * c.mass * c.gravity * c.com_height *
                                    inputs.angle.position +
-                               15 * s * c.inertia * inputs.angle.velocity);
+                               damping_contribution);
 
     // The sensed reaction torque has the opposite sign to the model input.
     const double acceleration_rad_s2 =
         (0.971 * c.mass * c.gravity * c.com_height * inputs.angle.position -
-         c.viscosity * rate_command_rad_s_ - torque_out) /
+         c.viscosity * rate_command_rad_s_ + torque_out) /
         c.inertia;
 
     const double next_rate_rad_s =

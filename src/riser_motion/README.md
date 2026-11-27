@@ -26,6 +26,19 @@ loop over CSV, enabled only with a positive, commissioned
 `footplate_position_gain_s_inv`. The real backboard and ML angle contracts
 are unavailable.
 
+Set the real speed limits in [axes.yaml](config/axes.yaml), or in the file
+selected by `axes_file`. The carriage cap is `max_velocity_m_s` (0.10 m/s).
+The footplate cap is that value times `footplate_rate_multiplier` (10),
+giving 1.0 rad/s by default. Relaunch to apply profile changes. Launch sends
+these caps to the G5 backend and publishes them as each resource's
+`velocity_limit` in the robot description. After converting pitch commands
+through the linkage, the G5 also applies the carriage cap.
+
+Motion profiles, calibration and the pendulum use the published limits.
+Controller-specific settings can tighten them. For example, the Gazebo
+backboard and ML profiles request 0.30 rad/s within their model limits.
+The GUI shows the cap for the selected motion profile.
+
 ### Local Gazebo
 
 ```bash
@@ -103,9 +116,10 @@ calibrated zero. Velocity CSV validation integrates signed velocity to estimate
 the angle excursion. At **Start**, the controller checks that the entire
 excursion fits from the current angle, or from the held setpoint in position
 mode. Velocity playback and jogs limit outward commands using measured pitch.
-The footplate profiles use this angle envelope in place of profile speed,
-acceleration and cumulative travel caps. The backend still applies its own
-actuator limits and hard switches.
+The footplate profiles use this angle envelope in place of acceleration
+and cumulative travel caps. Jog and CSV validation both check the angular
+speed cap. For position CSVs, that includes the peak speed between
+waypoints. The backend also applies its actuator limits and hard switches.
 
 Edit `footplate_lower_rad`, `footplate_upper_rad`, and `max_duration_s` under
 `motor_profile.ros__parameters` in [controllers.yaml](config/controllers.yaml).

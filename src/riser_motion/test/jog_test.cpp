@@ -31,7 +31,6 @@ int main() {
   requested.max_travel = .005;
   if (jog_limits_error(requested, .02, 10.).find("Travel cap") != 0)
     return 12;
-
   Settings caps;
   caps.ramp = .25;
   caps.max_travel = .1;
@@ -89,7 +88,8 @@ int main() {
   caps.max_travel = 0.;
   requested.position_envelope = caps.position_envelope;
   requested.speed = 1.;
-  if (!jog_limits_error(requested, 0., 60.).empty())
+  if (!jog_limits_error(requested, 1., 60.).empty() ||
+      jog_limits_error(requested, .9, 60.).find("Velocity cap") != 0)
     return 13;
   request.cancel = false;
   for (double rate : {-1., 1.}) {

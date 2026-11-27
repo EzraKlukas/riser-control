@@ -68,6 +68,7 @@ public:
     auto_declare<std::string>("command_mode", "velocity");
     auto_declare<std::string>("read_time_interface", "");
     auto_declare<double>("max_velocity_m_s", 0.0);
+    auto_declare<double>("max_velocity_rad_s", 0.0);
     auto_declare<double>("max_duration_s", 0.0);
     auto_declare<std::string>("joint", "bottom_motor");
     auto_declare<std::string>("profile", "ramp");
@@ -119,7 +120,16 @@ public:
     use_acquisition_time_ = !read_time.empty();
     if (use_acquisition_time_)
       state_names_.push_back(read_time);
-    if ((position_mode_ || footplate) && !configure_position_limits())
+    const char *speed_cap_parameter =
+        angular_ ? "max_velocity_rad_s" : "max_velocity_m_s";
+    const double requested_speed_cap =
+        get_node()->get_parameter(speed_cap_parameter).as_double();
+    if (!std::isfinite(requested_speed_cap) || requested_speed_cap < 0) {
+      RCLCPP_ERROR(get_node()->get_logger(), "Invalid speed cap for %s",
+                   joint_.c_str());
+      return controller_interface::CallbackReturn::ERROR;
+    }
+    if (!configure_limits(position_mode_ || footplate, requested_speed_cap))
       return controller_interface::CallbackReturn::ERROR;
     settings_.position_envelope.reset();
     if (footplate) {
@@ -137,11 +147,11 @@ public:
     }
     if (jog_mode_)
       settings_.profile = "ramp"; // A signed jog never reverses mid-request.
-    speed_cap_ = get_node()->get_parameter("max_velocity_m_s").as_double();
+    settings_.feedback_speed_tolerance =
+        angular_ ? 10 * kSpeedToleranceMps : kSpeedToleranceMps;
     duration_cap_ = get_node()->get_parameter("max_duration_s").as_double();
     if (joint_.empty() || !std::isfinite(duration_cap_) || duration_cap_ <= 0 ||
-        (!footplate && (!std::isfinite(speed_cap_) || speed_cap_ <= 0 ||
-                       std::abs(settings_.speed) > speed_cap_)) ||
+        std::abs(settings_.speed) > speed_cap_ ||
         settings_.duration > duration_cap_ || !valid(settings_)) {
       RCLCPP_ERROR(get_node()->get_logger(),
                    "Invalid profile, acceleration, timing or travel budget");
@@ -257,7 +267,7 @@ public:
     return controller_interface::CallbackReturn::SUCCESS;
   }
 
-  bool configure_position_limits() {
+  bool configure_limits(bool need_position, double requested_speed_cap) {
     try {
       const auto components = hardware_interface::parse_control_resources_from_urdf(
           get_robot_description());
@@ -266,6 +276,15 @@ public:
           for (const auto &resource : *resources) {
             if (resource.name != joint_)
               continue;
+            const double master_speed =
+                std::stod(resource.parameters.at("velocity_limit"));
+            if (!std::isfinite(master_speed) || master_speed <= 0)
+              break;
+            speed_cap_ = requested_speed_cap == 0
+                             ? master_speed
+                             : std::min(requested_speed_cap, master_speed);
+            if (!need_position)
+              return true;
             lower_position_ = std::stod(resource.parameters.at("lower"));
             upper_position_ = std::stod(resource.parameters.at("upper"));
             if (std::isfinite(lower_position_) && std::isfinite(upper_position_) &&
@@ -277,7 +296,7 @@ public:
     } catch (const std::exception &error) {
       RCLCPP_ERROR(get_node()->get_logger(), "%s", error.what());
     }
-    RCLCPP_ERROR(get_node()->get_logger(), "Missing or invalid position envelope for %s",
+    RCLCPP_ERROR(get_node()->get_logger(), "Missing or invalid motion limits for %s",
                  joint_.c_str());
     return false;
   }

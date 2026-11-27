@@ -27,6 +27,7 @@ struct Settings {
   double max_period = 0.005;
   // Footplate profiles use calibrated position instead of the cumulative travel budget.
   std::optional<PositionEnvelope> position_envelope = std::nullopt;
+  double feedback_speed_tolerance = kSpeedToleranceMps;
 };
 inline const char *profile_error(const Settings &s) {
   if (s.profile != "ramp" && s.profile != "sine" && s.profile != "triangle")

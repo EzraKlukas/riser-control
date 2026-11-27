@@ -3,6 +3,8 @@
 enabled: [bottom]
 metres_per_revolution: 0.010
 max_velocity_m_s: 0.10
+# Footplate command cap in rad/s is this factor times max_velocity_m_s.
+footplate_rate_multiplier: .0
 max_travel_m: 0.180
 max_acceleration_m_s2: 0.5
 calibration_speed_m_s: 0.01

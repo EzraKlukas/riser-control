@@ -2,8 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
-#include <tuple>
 #include <riser_kinematics/mapping.hpp>
+#include <tuple>
 
 namespace riser_hardware {
 struct FootplatePitch {
@@ -16,12 +16,13 @@ struct FootplatePitch {
   double position_command = 0, velocity_command = 0;
   bool homed = false;
 
-  bool configure(riser_kinematics::Domain angles, double rate,
-                 double sign, double gain) {
+  bool configure(riser_kinematics::Domain angles, double rate, double sign,
+                 double gain) {
     using namespace riser_kinematics;
-    if (!(angles.lower < 0 && angles.upper > 0) ||
-        (sign != 1 && sign != -1) || !(rate > 0) || gain < 0 ||
-        mapping.configure(canonical_geometry()[FootPitch], angles) != Error::None)
+    if (!(angles.lower < 0 && angles.upper > 0) || (sign != 1 && sign != -1) ||
+        !(rate > 0) || gain < 0 ||
+        mapping.configure(canonical_geometry()[FootPitch], angles) !=
+            Error::None)
       return false;
     const auto lo = mapping.forward(angles.lower);
     const auto hi = mapping.forward(angles.upper);
@@ -36,7 +37,8 @@ struct FootplatePitch {
   }
 
   void establish_reference(double midpoint, double half_travel) {
-    homed = std::isfinite(midpoint) && std::isfinite(half_travel) && half_travel > 0;
+    homed = std::isfinite(midpoint) && std::isfinite(half_travel) &&
+            half_travel > 0;
     if (!homed)
       return;
     zero_m = midpoint;
@@ -49,16 +51,19 @@ struct FootplatePitch {
     homed &= feedback;
     const auto neutral = mapping.forward(0.);
     const double mechanism_sign = riser_kinematics::kFootPitchMechanismSign;
-    const bool positive = neutral && direction * neutral.jacobian * mechanism_sign > 0;
+    const bool positive =
+        neutral && direction * neutral.jacobian * mechanism_sign > 0;
     forward_limit = positive ? forward : reverse;
     reverse_limit = positive ? reverse : forward;
     if (homed) {
-      const auto angle = mapping.inverse(direction * (carriage_m - zero_m),
-                                         mechanism_sign * position, direction * carriage_rate);
+      const auto angle =
+          mapping.inverse(direction * (carriage_m - zero_m),
+                          mechanism_sign * position, direction * carriage_rate);
       if (angle) {
         position = mechanism_sign * angle.position;
         velocity = mechanism_sign * angle.velocity;
-        jacobian = direction * angle.jacobian * mechanism_sign; // Encoder metres per mechanism radian.
+        jacobian = direction * angle.jacobian *
+                   mechanism_sign; // Encoder metres per mechanism radian.
         valid = 1;
         return;
       }
@@ -76,8 +81,8 @@ struct FootplatePitch {
           riser_kinematics::kFootPitchMechanismSign * position_command);
       if (!target)
         return NAN;
-      const double setpoint = std::clamp(zero_m + direction * target.position,
-                                         lower_m, upper_m);
+      const double setpoint =
+          std::clamp(zero_m + direction * target.position, lower_m, upper_m);
       speed = (setpoint - carriage_m) * position_gain;
     }
     if (!std::isfinite(speed))
