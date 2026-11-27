@@ -6,6 +6,7 @@
   <maintainer email="maintainer@example.com">RISER maintainers</maintainer>
   <license>BSD-3-Clause</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>xacro</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>joint_state_publisher_gui</exec_depend>
@@ -41,5 +42,5 @@
   <exec_depend>ros_gz_interfaces</exec_depend>
   <exec_depend>riser_kinematics</exec_depend>
   <exec_depend>std_srvs</exec_depend>
-  <exec_depend>riser_motion_bringup</exec_depend>
+  <exec_depend>riser_motion</exec_depend>
 </package>

@@ -25,7 +25,7 @@ struct Elm3604 {
   std::array<double, 3> uv_per_v_per_count{};
   std::array<std::array<double, 6>, 6> matrix{};
   std::array<double, 6> left{};
-  double zero = 0, valid = 0, left_mask = 0b001110;
+  double valid = 0, left_mask = 0b001110;
 
   bool configure(ec_master_t *master, unsigned position,
                  const std::string &coefficients,
@@ -108,13 +108,10 @@ struct Elm3604 {
   }
 
   void export_states(std::vector<hardware_interface::StateInterface> &states) {
-    for (const std::string side : {"left_force_plate", "right_force_plate"}) {
-      const bool is_left = side == "left_force_plate";
-      for (unsigned i = 0; i < fields.size(); ++i)
-        states.emplace_back(side, fields[i], is_left ? &left[i] : &zero);
-      states.emplace_back(side, "live_mask", is_left ? &left_mask : &zero);
-      states.emplace_back(side, "valid", &valid);
-    }
+    for (unsigned i = 0; i < fields.size(); ++i)
+      states.emplace_back("left_force_plate", fields[i], &left[i]);
+    states.emplace_back("left_force_plate", "live_mask", &left_mask);
+    states.emplace_back("left_force_plate", "valid", &valid);
   }
 };
 } // namespace riser_hardware

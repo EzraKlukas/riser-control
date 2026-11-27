@@ -2,48 +2,63 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 #include <riser_kinematics/mapping.hpp>
 
 namespace riser_hardware {
 struct FootplatePitch {
   riser_kinematics::Axis mapping;
   double zero_m = 0, direction = 0, lower_m = 0, upper_m = 0;
+  double cad_lower_m = 0, cad_upper_m = 0;
   double rate_limit = 0, position_gain = 0;
   double position = 0, velocity = 0, valid = 0, jacobian = 0;
+  double forward_limit = 0, reverse_limit = 0;
   double position_command = 0, velocity_command = 0;
+  bool homed = false;
 
   bool configure(riser_kinematics::Domain angles, double rate,
-                 double zero, double lower, double upper, double sign,
-                 double gain) {
+                 double sign, double gain) {
     using namespace riser_kinematics;
     if (!(angles.lower < 0 && angles.upper > 0) ||
-        !(lower < zero && zero < upper) || (sign != 1 && sign != -1) ||
-        !(rate > 0) || gain < 0 ||
+        (sign != 1 && sign != -1) || !(rate > 0) || gain < 0 ||
         mapping.configure(canonical_geometry()[FootPitch], angles) != Error::None)
       return false;
     const auto lo = mapping.forward(angles.lower);
     const auto hi = mapping.forward(angles.upper);
     if (!lo || !hi || lo.jacobian * hi.jacobian <= 0)
       return false;
-    const auto [cad_min, cad_max] =
-        std::minmax({zero + sign * lo.position, zero + sign * hi.position});
-    lower_m = std::max(lower, cad_min);
-    upper_m = std::min(upper, cad_max);
-    zero_m = zero;
+    std::tie(cad_lower_m, cad_upper_m) =
+        std::minmax({sign * lo.position, sign * hi.position});
     direction = sign;
     rate_limit = rate;
     position_gain = gain;
     return true;
   }
 
-  void read(bool feedback, double carriage_m, double carriage_rate) {
-    if (direction && feedback) {
+  void establish_reference(double midpoint, double half_travel) {
+    homed = std::isfinite(midpoint) && std::isfinite(half_travel) && half_travel > 0;
+    if (!homed)
+      return;
+    zero_m = midpoint;
+    lower_m = midpoint + std::max(-half_travel, cad_lower_m);
+    upper_m = midpoint + std::min(half_travel, cad_upper_m);
+  }
+
+  void read(bool feedback, double carriage_m, double carriage_rate,
+            double reverse = 0, double forward = 0) {
+    homed &= feedback;
+    const auto neutral = mapping.forward(0.);
+    const double mechanism_sign = riser_kinematics::kFootPitchMechanismSign;
+    const bool positive = neutral && direction * neutral.jacobian * mechanism_sign > 0;
+    forward_limit = positive ? forward : reverse;
+    reverse_limit = positive ? reverse : forward;
+    if (homed) {
       const auto angle = mapping.inverse(direction * (carriage_m - zero_m),
-                                         position, direction * carriage_rate);
+                                         mechanism_sign * position, direction * carriage_rate);
       if (angle) {
-        position = angle.position;
-        velocity = angle.velocity;
-        jacobian = direction * angle.jacobian; // Encoder metres per radian.
+        position = mechanism_sign * angle.position;
+        velocity = mechanism_sign * angle.velocity;
+        jacobian = direction * angle.jacobian * mechanism_sign; // Encoder metres per mechanism radian.
         valid = 1;
         return;
       }
@@ -57,7 +72,8 @@ struct FootplatePitch {
       return NAN;
     double speed = jacobian * velocity_command;
     if (use_position) {
-      const auto target = mapping.forward(position_command);
+      const auto target = mapping.forward(
+          riser_kinematics::kFootPitchMechanismSign * position_command);
       if (!target)
         return NAN;
       const double setpoint = std::clamp(zero_m + direction * target.position,

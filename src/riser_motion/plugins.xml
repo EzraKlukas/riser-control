@@ -1,0 +1,6 @@
+<library path="motion_controller">
+  <class name="riser_motion/MotionController" type="riser_motion::MotionController"
+         base_class_type="controller_interface::ControllerInterface">
+    <description>Bounded carriage and mechanism-angle motion profiles.</description>
+  </class>
+</library>

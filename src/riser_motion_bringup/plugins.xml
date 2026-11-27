@@ -1,1 +1,0 @@
-<library path="motion_controller"><class name="riser_motion_bringup/MotionController" type="riser_motion_bringup::MotionController" base_class_type="controller_interface::ControllerInterface"><description>Finite carriage velocity profiles in metres per second.</description></class></library>

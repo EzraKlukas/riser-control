@@ -1,0 +1,872 @@
+#!/usr/bin/env python3
+"""Laptop Qt operator console for the RISER Jazzy manager."""
+
+import argparse
+import math
+import os
+import shlex
+import sys
+import time
+import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import ClassVar
+
+import rclpy
+from ament_index_python.packages import get_package_share_path
+from builtin_interfaces.msg import Time
+from control_msgs.msg import DynamicJointState
+from controller_manager_msgs.srv import ListControllers, ListHardwareInterfaces
+from PySide6 import QtCore
+from PySide6 import QtWidgets as W
+from rcl_interfaces.srv import GetParameters
+from rclpy.node import Node
+from rclpy.parameter_client import AsyncParameterClient
+from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from rosbag2_interfaces.srv import IsPaused
+from std_msgs.msg import String
+
+from riser_motion.srv import Jog
+
+
+class Console(W.QWidget):
+    cap_names = (
+        "max_velocity_m_s",
+        "max_duration_s",
+        "ramp_s",
+        "max_acceleration_m_s2",
+        "max_travel_m",
+    )
+    labels: ClassVar[dict[str, str]] = {
+        "position": "Carriage position (m)",
+        "velocity": "Carriage velocity (m/s)",
+        "torque_nm": "Drive torque (shaft N·m)",
+        "torque_raw": "0x6077 (per mille)",
+        "reverse_limit": "Negative limit",
+        "forward_limit": "Positive limit",
+        "brake_release_request": "Brake release request (host servo enable)",
+        "brake_output_feedback": "Brake output feedback",
+        "physical_brake": "Physical brake",
+        "feedback_valid": "Feedback valid",
+        "ready": "Axis health",
+    }
+
+    def __init__(self, host):
+        super().__init__()
+        self.setWindowTitle("RISER commissioning")
+        self.resize(960, 780)
+        self.host = host
+        self.command_interfaces = set()
+        self.previewed = None
+        self.pending_preview = None
+        self.gazebo = False
+        self.node = Node("g5_operator")
+        self.executor = rclpy.executors.SingleThreadedExecutor()
+        self.executor.add_node(self.node)
+        self.last = 0
+        self.samples = {}
+        self.excluded = {}
+        self.rings = {}
+        self.jobs = set()
+        self.clients = {}
+        self.beats = {}
+        self.pulses = {}
+        self.cap_clients = {}
+        self.cap_request = None
+        self.caps = {}
+        layout = W.QVBoxLayout(self)
+        tabs = W.QTabWidget()
+        layout.addWidget(tabs)
+        self.output = W.QPlainTextEdit(readOnly=True)
+        self.output.setMaximumBlockCount(500)
+        layout.addWidget(self.output)
+        motion, data, system = [W.QFormLayout() for _ in range(3)]
+        for name, form in zip(["Motion", "Data", "System"], [motion, data, system]):
+            page = W.QWidget()
+            page.setLayout(form)
+            tabs.addTab(page, name)
+        self.axis = W.QComboBox()
+        self.axis.addItem("bottom_motor")
+        motion.addRow("Axis", self.axis)
+        self.command_mode = W.QComboBox()
+        self.command_mode.addItems(["velocity", "position"])
+        motion.addRow("Command interface", self.command_mode)
+        self.motion_shape = W.QComboBox()
+        self.velocity_shapes = ["jog", "ramp", "sine", "triangle", "CSV"]
+        self.motion_shape.addItems(self.velocity_shapes)
+        motion.addRow("Profile", self.motion_shape)
+        self.readout = W.QPlainTextEdit(readOnly=True)
+        motion.addRow(self.readout)
+        self.speed = W.QLineEdit("0.01")
+        self.speed_label = W.QLabel("Velocity (m/s)")
+        motion.addRow(self.speed_label, self.speed)
+        self.duration = self.field(motion, "Duration (s)", "1.0")
+        self.ramp = self.field(motion, "Ramp (s)", "0.25")
+        self.budget = W.QLabel()
+        motion.addRow("Host bounds", self.budget)
+        self.csv_status = W.QLabel("No CSV selected")
+        motion.addRow(self.csv_status)
+        self.buttons(motion, {
+            "Choose / preview CSV": self.choose_csv,
+            "Activate selected controller": lambda: self.selected_lifecycle("activate"),
+            "Deactivate selected controller": lambda: self.selected_lifecycle("deactivate"),
+        })
+        self.buttons(motion, {"Start": lambda: self.jog(False), "Cancel": lambda: self.jog(True)})
+        if self.host:
+            self.buttons(motion, {
+                "Clear selected G5 fault": self.clear_fault,
+                "Ordered bottom shutdown": self.shutdown_drive,
+            })
+            self.index = self.field(motion, "SDO index", "0x603f")
+            self.sub = self.field(motion, "Subindex", "0")
+            self.dtype = W.QComboBox()
+            self.dtype.addItems(["uint16", "uint32", "int16", "int32", "uint8", "int8"])
+            motion.addRow("Datatype", self.dtype)
+            self.buttons(motion, {"Upload SDO": self.upload})
+        self.record_state = W.QLabel()
+        self.recorder = self.node.create_client(IsPaused, "/rosbag2_recorder/is_paused")
+        self.pause_future = None
+        self.topics = self.field(
+            data, "Record / export topics" if self.host else "Bag plot topics",
+            "/dynamic_joint_states",
+        )
+        if self.host:
+            data.addRow("Recorder", self.record_state)
+            self.desc = self.field(data, "Trial description", "")
+            self.trial = self.field(data, "Finalized trial name", "")
+            self.buttons(
+                data,
+                {k.title(): lambda k=k: self.trial_action(k)
+                 for k in ("start", "pause", "resume", "stop", "list", "verify", "export")},
+            )
+        self.buttons(
+            data,
+            {
+                **({"Transfer command": self.transfer} if self.host else {}),
+                "Live PlotJuggler": lambda: self.run(
+                    [
+                        "ros2",
+                        "run",
+                        "plotjuggler",
+                        "plotjuggler",
+                        "-l",
+                        str(
+                            get_package_share_path("riser_motion")
+                            / "config/g5_plot.xml"
+                        ),
+                    ]
+                ),
+                "Open local bag in PlotJuggler": self.open_bag,
+            },
+        )
+        self.graph = W.QPlainTextEdit(readOnly=True)
+        system.addRow(self.graph)
+        self.controller = self.field(system, "Controller", "motor_profile")
+        self.buttons(
+            system,
+            {
+                k.title(): lambda k=k: self.lifecycle(k)
+                for k in ["load", "configure", "activate", "deactivate", "unload"]
+            },
+        )
+        self.param_node = self.field(system, "Parameter node", "/motor_profile")
+        self.param = self.field(system, "Parameter name", "max_velocity_m_s")
+        self.value = self.field(system, "Typed YAML value", "")
+        self.buttons(
+            system,
+            {
+                k.title(): lambda k=k: self.parameter(k)
+                for k in ["list", "describe", "get", "set"]
+            },
+        )
+        if self.host:
+            self.package = self.field(system, "Controller package", "riser_motion")
+            self.mask = self.field(system, "Enabled axes after restart", "bottom")
+            self.buttons(
+                system,
+                {
+                    "Rebuild / restart inhibited": self.rebuild,
+                    "Inactivate mock hardware": self.inactivate_mock,
+                    "Apply inactive mask": lambda: self.maintenance("--mask", self.mask.text()),
+                    "Stop released manager": lambda: self.maintenance("--stop"),
+                },
+            )
+        self.axis.currentTextChanged.connect(self.selection_changed)
+        self.command_mode.currentTextChanged.connect(self.selection_changed)
+        self.motion_shape.currentTextChanged.connect(self.update_profile_fields)
+        self.update_profile_fields()
+        self.node.create_subscription(
+            DynamicJointState,
+            "/g5_plot/dynamic_joint_states",
+            self.feedback,
+            qos_profile_sensor_data,
+        )
+        self.node.create_subscription(
+            String,
+            "/robot_description",
+            self.description,
+            QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+        )
+        self.controllers = self.node.create_client(
+            ListControllers, "/controller_manager/list_controllers"
+        )
+        self.interfaces = self.node.create_client(
+            ListHardwareInterfaces, "/controller_manager/list_hardware_interfaces"
+        )
+        self.snapshot = {}
+        self.pending = {}
+        self.param_client = None
+        self.param_key = ""
+        self.param_future = None
+        self.param_descriptor = None
+        self.param_display = ""
+        self.timer = QtCore.QTimer(self)
+        self.timer.timeout.connect(self.tick)
+        self.timer.start(20)
+        self.refresh = QtCore.QTimer(self)
+        self.refresh.timeout.connect(self.poll)
+        self.refresh.start(1000)
+
+    def field(self, form, name, value):
+        item = W.QLineEdit(value)
+        form.addRow(name, item)
+        return item
+
+    def buttons(self, form, actions):
+        row = W.QHBoxLayout()
+        for name, callback in actions.items():
+            button = W.QPushButton(name)
+            button.clicked.connect(lambda checked=False, fn=callback: self.invoke(fn))
+            row.addWidget(button)
+        form.addRow(row)
+
+    def invoke(self, callback):
+        try:
+            callback()
+        except (ValueError, KeyError, OSError) as exc:
+            self.output.appendPlainText(str(exc))
+
+    def description(self, msg):
+        control = ET.fromstring(msg.data).find("ros2_control")
+        if control is None:
+            return
+        self.command_interfaces = {
+            f"{resource.get('name')}/{iface.get('name')}"
+            for resource in control
+            if resource.tag in ("joint", "gpio")
+            for iface in resource.findall("command_interface")
+        }
+        hw = control.find("hardware")
+        if hw is None:
+            return
+        self.hw = {p.get("name"): p.text for p in hw.findall("param")}
+        self.real = hw.findtext("plugin") == "riser_hardware/BottomCsvSystem"
+        self.gazebo = hw.findtext("plugin") == "riser_gazebo/AngularSystem"
+        self.rings = {
+            k.removesuffix("_position"): int(v, 0)
+            for k, v in self.hw.items()
+            if k.endswith("_motor_position")
+        }
+
+    def feedback(self, msg):
+        age = self.node.get_clock().now().nanoseconds * 1e-9 - (
+            msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+        )
+        self.last = time.monotonic() - (abs(age) if self.host else 0)
+        self.samples = {
+            name: dict(zip(v.interface_names, v.values))
+            for name, v in zip(msg.joint_names, msg.interface_values)
+            if name.endswith(("_motor", "_excluded"))
+            or name in ("foot_plate_pitch", "backboard_pitch", "ml_angle")
+        }
+        self.excluded = {
+            n.removesuffix("_excluded"): self.samples.pop(n).get("discovered", math.nan)
+            for n in list(self.samples)
+            if n.endswith("_excluded")
+        }
+        axes = {
+            name for name in self.samples
+            if not self.gazebo or f"{name}/velocity" in self.command_interfaces
+        }
+        if axes != {
+            self.axis.itemText(i) for i in range(self.axis.count())
+        }:
+            selected = self.axis.currentText()
+            with QtCore.QSignalBlocker(self.axis):
+                self.axis.clear()
+                self.axis.addItems(sorted(axes, key=lambda name: (name != "bottom_motor", name)))
+                if selected in axes:
+                    self.axis.setCurrentText(selected)
+            if self.axis.currentText() != selected:
+                self.selection_changed()
+
+    def tick(self):
+        for _ in range(5):
+            self.executor.spin_once(timeout_sec=0)
+        for axis, (stamp, until) in list(self.pulses.items()):
+            if time.monotonic() > until or time.monotonic() - self.last > 0.3:
+                del self.pulses[axis]
+            else:
+                self.beats[axis].publish(stamp)
+        v = self.samples.get(self.axis.currentText(), {})
+        angular = self.is_angular()
+        stale = time.monotonic() - self.last > 0.3 or v.get(
+            "valid" if angular else "feedback_valid"
+        ) != 1
+        labels = self.labels if not angular else {
+            **self.labels, "position": "Mechanism angle (rad)",
+            "velocity": "Angular velocity (rad/s)", "valid": "Calibrated feedback valid",
+        }
+
+        def show(k, x):
+            if not math.isfinite(x) or (
+                k in ("brake_output_feedback", "physical_brake") and x == -1
+            ):
+                return "Unknown"
+            if k == "ready":
+                return {
+                    0: "Unavailable or faulted",
+                    1: "Healthy, disabled",
+                    2: "Healthy, operation enabled",
+                }.get(x, "Unknown")
+            if k == "host_fault":
+                causes = (
+                    "Clear",
+                    "I/O, sync or command",
+                    "Cycle interval",
+                    "Feedback lost or acquisition timed out",
+                    "Unexpected drive disable",
+                    "Drive fault",
+                    "Invalid feedback",
+                    "Travel limit",
+                    "Speed limit",
+                    "Mode mismatch",
+                )
+                code = int(x)
+                return (
+                    f"{code}  {causes[code]}" if 0 <= code < len(causes) else str(code)
+                )
+            if k in {"digital_inputs", "statusword", "controlword", "fault_code"}:
+                return hex(int(x))
+            return f"{x:.6g}"
+
+        readout = (
+            ("Stale" if stale else "Live")
+            + "   enabled: "
+            + getattr(self, "hw", {}).get("enabled_axes", "?")
+            + "   configured: "
+            + getattr(self, "hw", {}).get("configured_axes", "?")
+            + "\n"
+            + "".join(
+                f"{axis} excluded, discovered {show('discovered', value)}\n"
+                for axis, value in self.excluded.items()
+            )
+            + "\n".join(
+                f"{labels.get(k, k)}    {show(k, x)}" for k, x in v.items()
+            )
+        )
+
+        self.update_readout(self.readout, readout)
+
+    @staticmethod
+    def update_readout(widget, text):
+        if text == widget.toPlainText():
+            return
+        scrollbars = (widget.verticalScrollBar(), widget.horizontalScrollBar())
+        positions = [bar.value() for bar in scrollbars]
+        widget.setPlainText(text)
+        for bar, position in zip(scrollbars, positions):
+            bar.setValue(position)
+
+    def poll(self):
+        nodes = self.node.get_node_names_and_namespaces()
+        self.poll_parameter()
+        self.poll_caps()
+        if self.recorder.service_is_ready():
+            if self.pause_future is None or self.pause_future.done():
+                if self.pause_future and self.pause_future.result():
+                    self.record_state.setText(
+                        "Paused" if self.pause_future.result().paused else "Recording"
+                    )
+                self.pause_future = self.recorder.call_async(IsPaused.Request())
+        else:
+            self.record_state.setText("Recorder unavailable")
+            self.pause_future = None
+        for key, client, req in [
+            ("controllers", self.controllers, ListControllers.Request()),
+            ("interfaces", self.interfaces, ListHardwareInterfaces.Request()),
+        ]:
+            if not client.service_is_ready():
+                self.snapshot[key] = "Unavailable"
+                if key in self.pending:
+                    self.pending.pop(key).cancel()
+                continue
+            future = self.pending.get(key)
+            if future and not future.done():
+                continue
+            if future and future.result():
+                res = future.result()
+                self.snapshot[key] = (
+                    "\n".join(f"{c.name}  {c.state}" for c in res.controller)
+                    if key == "controllers"
+                    else "\n".join(
+                        f"{i.name}  available={i.is_available} claimed={i.is_claimed}"
+                        for i in [*res.command_interfaces, *res.state_interfaces]
+                    )
+                )
+            self.pending[key] = client.call_async(req)
+        self.update_readout(
+            self.graph,
+            "Nodes   "
+            + ", ".join(ns.rstrip("/") + "/" + n for n, ns in nodes)
+            + "\n"
+            + "\n".join(self.snapshot.values())
+            + "\n"
+            + self.param_display,
+        )
+
+    def is_angular(self):
+        return self.axis.currentText() in ("foot_plate_pitch", "backboard_pitch", "ml_angle")
+
+    def profile_name(self):
+        axis = self.axis.currentText()
+        base = {
+            "bottom_motor": "motor", "foot_plate_pitch": "angle",
+            "backboard_pitch": "backboard", "ml_angle": "ml",
+        }.get(axis, axis.removesuffix("_motor"))
+        position = "_position" if self.command_mode.currentText() == "position" else ""
+        return base + position + "_profile"
+
+    def selection_changed(self, *_):
+        self.previewed = None
+        self.pending_preview = None
+        self.csv_status.setText("No CSV selected")
+        self.speed_label.setText("Velocity (rad/s)" if self.is_angular() else "Velocity (m/s)")
+        shapes = ["CSV"] if self.command_mode.currentText() == "position" else self.velocity_shapes
+        shape = self.motion_shape.currentText()
+        with QtCore.QSignalBlocker(self.motion_shape):
+            self.motion_shape.clear()
+            self.motion_shape.addItems(shapes)
+            if shape in shapes:
+                self.motion_shape.setCurrentText(shape)
+        self.update_profile_fields()
+
+    def update_profile_fields(self, *_):
+        shape = self.motion_shape.currentText()
+        self.speed.setEnabled(shape != "CSV")
+        self.duration.setEnabled(shape != "CSV")
+        self.ramp.setEnabled(shape in ("ramp", "sine", "triangle"))
+
+    def require_command_interface(self):
+        self.require_backend()
+        key = f"{self.axis.currentText()}/{self.command_mode.currentText()}"
+        if key not in self.command_interfaces:
+            raise ValueError(f"Unavailable command interface {key}")
+
+    def require_backend(self):
+        if not self.host and not self.gazebo:
+            raise ValueError("Local Gazebo mode requires a Gazebo robot description")
+
+    def selected_lifecycle(self, action):
+        self.require_command_interface()
+        self.controller.setText(self.profile_name())
+        self.lifecycle(action)
+
+    def choose_csv(self):
+        self.require_command_interface()
+        path, _ = W.QFileDialog.getOpenFileName(self, "Motion profile CSV", "", "CSV (*.csv)")
+        if not path:
+            return
+        self.previewed = None
+        with Path(path).open("rb") as stream:
+            content = stream.read(256 * 1024 + 1)
+        if not content or len(content) > 256 * 1024:
+            raise ValueError("Select a nonempty motion CSV up to 256 KiB")
+        csv = content.decode("utf-8")
+        self.motion_shape.setCurrentText("CSV")
+        self.pending_preview = (path, csv)
+        self.jog(False, preview=self.pending_preview)
+
+    def poll_caps(self):
+        name = self.profile_name()
+        if name not in self.cap_clients:
+            self.cap_clients[name] = self.node.create_client(
+                GetParameters, "/" + name + "/get_parameters"
+            )
+        client = self.cap_clients[name]
+        if self.cap_request:
+            owner, started, future = self.cap_request
+            if (
+                owner == name
+                and client.service_is_ready()
+                and not future.done()
+                and time.monotonic() - started < 2
+            ):
+                return
+            self.cap_request = None
+            self.caps.clear()
+            if owner == name and future.done() and not future.cancelled():
+                response = future.result()
+                if response and len(response.values) == len(self.cap_names):
+                    self.caps[name] = dict(
+                        zip(self.cap_names, (v.double_value for v in response.values))
+                    )
+            else:
+                future.cancel()
+        if not client.service_is_ready():
+            self.caps.clear()
+        caps = self.caps.get(name)
+        unit = "rad" if self.is_angular() else "m"
+        key = f"{self.axis.currentText()}/{self.command_mode.currentText()}"
+        if key not in self.command_interfaces:
+            self.budget.setText(f"Unavailable command interface {key}")
+        elif caps:
+            self.budget.setText(
+                f"{caps['max_velocity_m_s']:.4g} {unit}/s, {caps['max_duration_s']:.4g} s, "
+                f"{caps['ramp_s']:.4g} s ramp, {caps['max_acceleration_m_s2']:.4g} {unit}/s², "
+                f"{caps['max_travel_m']:.4g} {unit}"
+            )
+        else:
+            self.budget.setText("Unavailable")
+        if client.service_is_ready():
+            request = GetParameters.Request(names=list(self.cap_names))
+            self.cap_request = name, time.monotonic(), client.call_async(request)
+
+    def poll_parameter(self):
+        key = (self.param_node.text().strip(), self.param.text().strip())
+        if not all(key):
+            return
+        if key != self.param_key:
+            self.param_future = self.param_descriptor = None
+            self.param_display = ""
+            self.param_key = key
+            if self.param_client:
+                for client in self.param_client_clients:
+                    self.node.destroy_client(client)
+            before = list(self.node.clients)
+            self.param_client = AsyncParameterClient(self.node, key[0])
+            self.param_client_clients = [
+                c for c in self.node.clients if c not in before
+            ]
+        if not self.param_client.services_are_ready():
+            if self.param_future:
+                for future in self.param_future:
+                    future.cancel()
+                self.param_future = None
+            self.param_descriptor = None
+            self.param_display = f"{key[0]}  {key[1]}  unavailable"
+            return
+        if self.param_future:
+            if not all(f.done() for f in self.param_future):
+                return
+            values, desc = [f.result() for f in self.param_future]
+            if values and desc and values.values and desc.descriptors:
+                from rclpy.parameter import parameter_value_to_python
+
+                self.param_descriptor = desc.descriptors[0]
+                value = parameter_value_to_python(values.values[0])
+                self.param_display = (
+                    f"{key[0]}  {key[1]}  ({type(value).__name__})  {value}"
+                )
+                if self.param_descriptor.read_only:
+                    self.param_display += "  read-only"
+        self.param_future = (
+            self.param_client.get_parameters([key[1]]),
+            self.param_client.describe_parameters([key[1]]),
+        )
+
+    def dispose(self):
+        # Destroy QObject children and their Python signal closures while the
+        # application and interpreter are still alive.
+        self.close()
+        self.node.destroy_node()
+        self.deleteLater()
+        QtCore.QCoreApplication.sendPostedEvents(None, QtCore.QEvent.DeferredDelete)
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        self.refresh.stop()
+        self.pulses.clear()
+        if self.executor is not None:
+            self.executor.remove_node(self.node)
+            self.executor.shutdown()
+            self.executor = None
+        super().closeEvent(event)
+
+    def run(self, argv, on_success=None):
+        self.output.appendPlainText("$ " + shlex.join(argv))
+        p = QtCore.QProcess(self)
+        self.jobs.add(p)
+        p.setProcessChannelMode(QtCore.QProcess.MergedChannels)
+        chunks = []
+
+        def read():
+            chunk = bytes(p.readAllStandardOutput()).decode(errors="replace")
+            if on_success:
+                chunks.append(chunk)
+            self.output.appendPlainText(chunk.rstrip())
+
+        p.readyReadStandardOutput.connect(read)
+        # Startup errors also produce a result when no child process was created.
+        p.errorOccurred.connect(lambda _: self.output.appendPlainText(p.errorString()))
+
+        def finish(code, *_):
+            self.output.appendPlainText(f"Exit {code}")
+            self.jobs.discard(p)
+            p.deleteLater()
+            if code == 0 and on_success:
+                on_success("".join(chunks))
+
+        p.finished.connect(finish)
+        p.start(argv[0], argv[1:])
+
+    def remote(self, argv, on_success=None):
+        # Only argv data reaches the remote shell, quoted once at each boundary.
+        domain = str(int(os.getenv("ROS_DOMAIN_ID", "0")))
+        script = (
+            'cd "$HOME/riser-control" && source /opt/ros/jazzy/setup.bash && source install/setup.bash && export ROS_DOMAIN_ID='
+            + domain
+            + " && exec "
+            + shlex.join(argv)
+        )
+        self.run(
+            [
+                "ssh",
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=5",
+                "--",
+                self.host,
+                shlex.join(["bash", "-c", script]),
+            ],
+            on_success,
+        )
+
+    def jog(self, cancel, preview=None):
+        self.require_backend()
+        axis = self.axis.currentText()
+        name = self.profile_name()
+        if name not in self.clients:
+            self.clients[name] = self.node.create_client(Jog, "/" + name + "/jog")
+        client = self.clients[name]
+        req = Jog.Request(cancel=cancel)
+        duration = 0.
+        if not cancel:
+            self.require_command_interface()
+            shape = self.motion_shape.currentText()
+            if preview:
+                req.csv = preview[1]
+                req.preview = True
+            elif shape == "CSV":
+                if not self.previewed or self.previewed[0] != name:
+                    raise ValueError("Preview the CSV on the selected execution controller")
+                _, req.csv, duration = self.previewed
+            else:
+                req.velocity_m_s = float(self.speed.text())
+                req.duration_s = duration = float(self.duration.text())
+                if shape != "jog":
+                    req.profile = shape
+                    req.ramp_s = float(self.ramp.text())
+            if not preview:
+                feedback = self.samples.get(axis, {})
+                if time.monotonic() - self.last > 0.3 or (
+                    self.is_angular() and feedback.get("valid") != 1
+                ) or (
+                    not self.is_angular() and
+                    (feedback.get("feedback_valid") != 1 or feedback.get("ready") != 2)
+                ):
+                    raise ValueError("Wait for live, ready feedback and angular calibration")
+        if not client.service_is_ready():
+            raise ValueError(f"{name} service unavailable. Check controller and launch state.")
+        req.stamp = self.node.get_clock().now().to_msg()
+        if name not in self.beats:
+            self.beats[name] = self.node.create_publisher(Time, "/" + name + "/jog_heartbeat", 1)
+        if cancel:
+            self.pulses.pop(name, None)
+        future = client.call_async(req)
+
+        def response(f):
+            result = f.result()
+            self.output.appendPlainText(str(result))
+            if preview is not None and self.pending_preview is preview:
+                if result and result.accepted:
+                    preview_duration = float(result.message.split()[-2])
+                    self.previewed = (name, preview[1], preview_duration)
+                    rows = preview[1].splitlines()
+                    excerpt = "\n".join(rows if len(rows) <= 12 else rows[:9] + ["…"] + rows[-2:])
+                    self.csv_status.setText(f"{Path(preview[0]).name} · {result.message}")
+                    self.output.appendPlainText(excerpt)
+                else:
+                    self.csv_status.setText("CSV rejected by execution host")
+            elif result and result.accepted and not cancel and not preview:
+                wall_limit = 4 * duration + 2 if self.gazebo else duration + 1
+                self.pulses[name] = (req.stamp, time.monotonic() + wall_limit)
+
+        future.add_done_callback(response)
+
+    def address(self):
+        axis = self.axis.currentText()
+        if self.is_angular():
+            raise ValueError("Select a linear motor for G5 maintenance")
+        if getattr(self, "real", None) is False:
+            raise ValueError("Physical drive actions are unavailable on a mock graph")
+        hw = getattr(self, "hw", {})
+        if not hw and axis == "bottom_motor":
+            return ["0", "0", "0"]
+        return [hw["master_index"], str(self.rings[axis]), hw[axis + "_serial"]]
+
+    def clear_fault(self):
+        self.remote(
+            ["bash", "src/riser_hardware/scripts/reset_g5_fault.sh", *self.address()]
+        )
+
+    def shutdown_drive(self):
+        self.address()
+        self.remote(
+            ["bash", "src/riser_hardware/scripts/shutdown_bottom_motor.sh"]
+            + (
+                ["--stop-profile"]
+                if "motor_profile  active" in self.snapshot.get("controllers", "")
+                else []
+            )
+        )
+
+    def upload(self):
+        index, sub = int(self.index.text(), 0), int(self.sub.text(), 0)
+        self.remote(
+            [
+                "ros2",
+                "run",
+                "riser_motion",
+                "g5_upload",
+                *self.address(),
+                hex(index),
+                str(sub),
+                self.dtype.currentText(),
+            ]
+        )
+
+    def lifecycle(self, k):
+        self.require_backend()
+        name = self.controller.text()
+        args = {
+            "load": ["load_controller", name],
+            "configure": ["set_controller_state", name, "inactive"],
+            "activate": ["set_controller_state", name, "active"],
+            "deactivate": ["set_controller_state", name, "inactive"],
+            "unload": ["unload_controller", name],
+        }
+        self.run(["ros2", "control", *args[k]])
+
+    def parameter(self, k):
+        if k == "set":
+            self.require_backend()
+        node = self.param_node.text()
+        if k == "set" and self.param_descriptor and self.param_descriptor.read_only:
+            raise ValueError("Parameter is read-only")
+        if k == "set" and node.strip("/") + "  active" in self.snapshot.get(
+            "controllers", ""
+        ):
+            raise ValueError(
+                "Deactivate the controller before changing its configuration"
+            )
+        self.run(
+            ["ros2", "param", k, node]
+            + ([] if k == "list" else [self.param.text()])
+            + ([self.value.text()] if k == "set" else [])
+        )
+
+    def inactivate_mock(self):
+        if getattr(self, "real", None) is not False:
+            raise ValueError("Use ordered PREOP shutdown on the G5 bench")
+        self.run(
+            [
+                "ros2",
+                "control",
+                "set_hardware_component_state",
+                "BottomMotor",
+                "inactive",
+            ]
+        )
+
+    def maintenance(self, *args):
+        self.remote(["ros2", "run", "riser_motion", "g5_rebuild", *args])
+
+    def rebuild(self):
+        self.maintenance("--package", self.package.text())
+
+    def trial_action(self, k):
+        args = (
+            [self.desc.text(), *self.topics.text().split()]
+            if k == "start"
+            else [self.trial.text(), *self.topics.text().split()]
+            if k == "export"
+            else [self.trial.text()]
+            if k == "verify"
+            else []
+        )
+
+        def select(text):
+            names = [line.strip() for line in text.splitlines() if line.strip()]
+            if k == "start" and names:
+                self.trial.setText(names[-1])
+            elif k == "list" and names:
+                value, ok = W.QInputDialog.getItem(
+                    self, "Finalized trials", "Trial", names, editable=False
+                )
+                if ok:
+                    self.trial.setText(value)
+
+        self.remote(
+            ["ros2", "run", "riser_motion", "g5_trial", k, *args],
+            select if k in ("list", "start") else None,
+        )
+
+    def transfer(self):
+        import re
+
+        name = self.trial.text()
+        if not re.fullmatch("[A-Za-z0-9_-]+", name):
+            raise ValueError("Select a dated trial")
+        self.output.appendPlainText(
+            shlex.join(
+                ["scp", "-r", "--", self.host + ":riser-control/data/" + name, "."]
+            )
+        )
+
+    def open_bag(self):
+        path, _ = W.QFileDialog.getOpenFileName(
+            self, "Select transferred bag", "", "ROS bag (*.mcap *.db3 metadata.yaml)"
+        )
+        if path:
+            from pathlib import Path
+
+            self.run(
+                [
+                    "ros2",
+                    "run",
+                    "riser_motion",
+                    "g5_plot_trial",
+                    str(Path(path).parent),
+                    *self.topics.text().split(),
+                ]
+            )
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    connection = parser.add_mutually_exclusive_group(required=True)
+    connection.add_argument("--ssh-host")
+    connection.add_argument("--local-gazebo", action="store_true")
+    args = parser.parse_args()
+    app = W.QApplication(sys.argv)
+    rclpy.init()
+    window = Console(args.ssh_host)
+    window.show()
+    app.exec()
+    window.dispose()
+    rclpy.shutdown()
+
+
+if __name__ == "__main__":
+    main()

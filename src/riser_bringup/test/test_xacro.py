@@ -31,7 +31,7 @@ def test_angular_interfaces_and_shared_geometry():
                 assert control.find("hardware/plugin").text == plugin
                 expected = ["backboard_pitch", "foot_plate_pitch", "ml_angle"]
                 assert [j.get("name") for j in control.findall("joint")] == expected
-                expected_gpios = ["top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"] if backend == "gazebo" else []
+                expected_gpios = ["top_motor", "torso_motor", "hip_motor", "bottom_motor"] if backend == "gazebo" else []
                 assert [g.get("name") for g in control.findall("gpio")] == expected_gpios
                 expected_sensors = ["left_force_plate", "right_force_plate"] if backend == "gazebo" else []
                 assert [s.get("name") for s in control.findall("sensor")] == expected_sensors
@@ -39,17 +39,51 @@ def test_angular_interfaces_and_shared_geometry():
                     assert root.find(f"joint[@name='{name}']") is None
                 for j in control.findall("joint") + control.findall("gpio"):
                     commands = ["position", "velocity"] if backend == "gazebo" else [mode]
+                    if j.tag == "gpio":
+                        commands += ["calibration_midpoint", "calibration_half_travel"]
                     assert [x.get("name") for x in j.findall("command_interface")] == commands
                     for parameter in ("lower", "upper", "velocity_limit"):
                         assert j.find(f"param[@name='{parameter}']") is not None
                     states = ["position", "velocity", "effort"]
                     if j.tag == "gpio":
-                        states += ["limit_switch_lower", "limit_switch_upper"]
+                        states += ["ready", "feedback_valid"]
+                    if backend == "gazebo":
+                        states += ["reverse_limit", "forward_limit"]
+                        if j.tag == "joint":
+                            states += ["valid"]
                     assert [x.get("name") for x in j.findall("state_interface")] == states
             for limit in root.findall("joint/limit"):
                 limit.attrib.pop("velocity", None)
+            # Gazebo uses symmetric foot travel. Other geometry matches.
+            root.find("joint[@name='foot_plate_pitch']/limit").attrib.pop("lower")
             signatures.append([E.tostring(j) for j in root.findall("joint")])
     assert all(s == signatures[0] for s in signatures)
+
+
+@pytest.mark.parametrize(
+    ("axes", "motors", "angles"),
+    [
+        ("bottom", ["bottom_motor"], ["foot_plate_pitch"]),
+        ("torso", ["torso_motor"], []),
+        ("torso,hip", ["torso_motor", "hip_motor"], ["ml_angle"]),
+    ],
+)
+def test_gazebo_enabled_axes(axes, motors, angles):
+    share = Path(get_package_share_directory("riser_bringup"))
+    root = E.fromstring(xacro.process_file(
+        str(share / "urdf/riser.urdf.xacro"),
+        mappings={"backend": "gazebo", "enabled_axes": axes},
+    ).toxml())
+    control = root.find("ros2_control")
+    assert [gpio.get("name") for gpio in control.findall("gpio")] == motors
+    assert [joint.get("name") for joint in control.findall("joint")
+            if joint.find("command_interface") is not None] == angles
+    limits = control.find("hardware/param[@name='motor_limits']").text.split()
+    assert len(limits) == 12
+    # The full physical model and wrench inputs remain present.
+    assert root.find("joint[@name='backboard_pitch']") is not None
+    assert control.find("joint[@name='foot_plate_pitch']/state_interface[@name='position']") is not None
+    assert len(control.findall("sensor")) == 2
 
 
 def test_independent_sensing_paths_and_contact_geometry():
@@ -116,7 +150,11 @@ def test_backend_velocity_limits(backend, mode):
     model = str(share / "urdf/riser.urdf.xacro")
     mappings = {"backend": backend, "command_mode": mode}
     root = E.fromstring(xacro.process_file(model, mappings=mappings).toxml())
-    k = json.loads((share / "urdf/model/kinematics.yaml").read_text())["joints"]
+    model_config = json.loads((share / "urdf/model/kinematics.yaml").read_text())
+    k = model_config["joints"]
+    if backend == "gazebo":
+        foot = model_config["gazebo_foot_travel"]
+        k["foot_pitch"].update(lower=foot["lower_pitch_rad"], upper=foot["upper_pitch_rad"])
     for name, axis in (
         ("backboard_pitch", "frame_pitch"),
         ("torso_lateral", "torso_lateral"),
@@ -134,6 +172,9 @@ def test_backend_velocity_limits(backend, mode):
         if name in ("backboard_pitch", "foot_plate_pitch"):
             control = root.find(f"ros2_control/joint[@name='{name}']")
             assert float(control.find("param[@name='velocity_limit']").text) == expected
+            if backend == "gazebo" and name == "foot_plate_pitch":
+                assert float(control.find("param[@name='lower']").text) == -config["upper"]
+                assert float(control.find("param[@name='upper']").text) == -config["lower"]
 
 
 def test_neutral_frames_and_geometric_limits():
@@ -184,10 +225,13 @@ def test_gazebo_startup_modes(mode):
     assert len(root.findall("ros2_control/joint")) == 3
     assert len(root.findall("ros2_control/gpio")) == 4
     resources = root.findall("ros2_control/joint") + root.findall("ros2_control/gpio")
-    assert sum(len(r.findall("command_interface")) for r in resources) == 14
-    k = json.loads((share / "urdf/model/kinematics.yaml").read_text())["joints"]
+    assert sum(len(r.findall("command_interface")) for r in resources) == 22
+    model_config = json.loads((share / "urdf/model/kinematics.yaml").read_text())
+    k = model_config["joints"]
+    stroke = model_config["gazebo_foot_travel"]["stroke_limit_m"]
+    k["bottom_actuator"].update(lower=-stroke, upper=stroke)
     for gpio in root.findall("ros2_control/gpio"):
-        limits = k[gpio.get("name")]
+        limits = k[gpio.get("name").replace("_motor", "_actuator")]
         for key in ("lower", "upper"):
             assert float(gpio.find(f"param[@name='{key}']").text) == limits[key]
         assert float(gpio.find("param[@name='velocity_limit']").text) == limits["upper"] - limits["lower"]

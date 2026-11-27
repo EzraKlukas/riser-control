@@ -55,13 +55,21 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   std::array<double, kPublicJointCount> position_{}, velocity_{}, effort_{},
       reference_position_{}, reference_velocity_{};
 
-  // 14 total command interfaces.
+  // Position and velocity commands for both representations.
   std::array<double, kAngularInterfaceCount> angular_position_command_{};
   std::array<double, kAngularInterfaceCount> angular_velocity_command_{};
   std::array<double, kLinearInterfaceCount> actuator_position_command_{};
   std::array<double, kLinearInterfaceCount> actuator_velocity_command_{};
   std::array<double, kLinearInterfaceCount> limit_switch_lower_{},
       limit_switch_upper_{};
+  std::array<double, AngularCount> angular_position_{}, angular_velocity_{},
+      angular_valid_{}, angular_reverse_{}, angular_forward_{};
+  kin::Coordinates calibration_midpoint_{}, calibration_half_travel_{},
+      angle_zero_{};
+  bool calibrated_ = false;
+  unsigned enabled_motors_ = 0, enabled_angles_ = 0;
+  double motor_ready_ = 2, feedback_valid_ = 0;
+  std::atomic<unsigned> valid_angles_{0};
   double limit_switch_offset_ = 0.003; // metres inside each hard stop
   std::array<double, kPublicJointCount> position_lower_limits_{},
       position_upper_limits_{}, velocity_limits_{};
@@ -146,8 +154,8 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
   int64_t last_write_ns_ = -1;
   // prepare() can run on the service thread. perform() and write() run on
   // the simulation thread, which also owns the references and commands.
-  std::atomic<CommandMode> command_mode_{CommandMode::None};
-  static_assert(std::atomic<CommandMode>::is_always_lock_free);
+  std::atomic<kin::CommandClaim> command_claim_{};
+  static_assert(std::atomic<kin::CommandClaim>::is_always_lock_free);
   rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr state_pub_;
 
   const std::array<std::string, 2> force_plate_names_{"left_force_plate",
@@ -200,7 +208,8 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     reference_velocity_.fill(0);
     physical_reference_position_ = physical_position_;
     physical_reference_velocity_.fill(0);
-    std::copy_n(position_.begin(), AngularCount,
+    reference_position_[Ml] = angular_position_[Ml];
+    std::copy_n(angular_position_.begin(), AngularCount,
                 angular_position_command_.begin());
     angular_velocity_command_.fill(0);
     for (std::size_t axis = 0; axis < ActuatorCount; ++axis)
@@ -209,12 +218,18 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     references_seeded_ = true;
   }
 
-  void update_references(CommandMode mode, double step_seconds) {
+  void update_references(kin::CommandClaim claim, double step_seconds) {
+    const auto mode = claim.mode;
     PublicCoordinates commands{};
     if (angular(mode)) {
       const auto &source = velocity(mode) ? angular_velocity_command_
                                           : angular_position_command_;
       std::copy(source.begin(), source.end(), commands.begin());
+      commands[FootPlate] *= kin::kFootPitchMechanismSign;
+      if (!velocity(mode)) {
+        commands[Backboard] += angle_zero_[kin::FramePitch];
+        commands[FootPlate] += angle_zero_[kin::FootPitch];
+      }
     } else {
       const auto &source = velocity(mode) ? actuator_velocity_command_
                                           : actuator_position_command_;
@@ -227,8 +242,8 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
       constexpr std::array<std::size_t, ActuatorCount> angular_coordinate{
           Backboard, Ml, Ml, FootPlate};
       for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
-        const auto coordinate = angular(mode) ? angular_coordinate[axis]
-                                              : PublicForAxis[axis];
+        const auto coordinate =
+            angular(mode) ? angular_coordinate[axis] : PublicForAxis[axis];
         auto &command = commands[coordinate];
         const double stroke_direction =
             angular(mode) ? measured_jacobian_[axis] * command : command;
@@ -246,7 +261,8 @@ class AngularSystem final : public gz_ros2_control::GazeboSimSystemInterface {
     auto next_physical_velocity = physical_reference_velocity_;
     if (reference_mapping_.update(mode, commands, step_seconds, next_position,
                                   next_velocity, next_physical,
-                                  next_physical_velocity) != kin::Error::None)
+                                  next_physical_velocity, claim.joints,
+                                  angle_zero_) != kin::Error::None)
       throw std::domain_error("Invalid or out-of-bounds mapped reference");
 
     for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
@@ -384,27 +400,51 @@ public:
       if (switch_offset != hardware_info.hardware_parameters.end())
         limit_switch_offset_ = std::stod(switch_offset->second);
       if (hardware_info.joints.size() != kAngularInterfaceCount ||
-          hardware_info.gpios.size() != kLinearInterfaceCount)
+          hardware_info.gpios.empty() ||
+          hardware_info.gpios.size() > kLinearInterfaceCount)
         throw std::runtime_error(
-            "Exactly three angular joints and four actuator GPIOs required");
-      for (size_t axis_index = 0; axis_index < kPublicJointCount;
+            "Expected three angular joints and one to four actuator GPIOs");
+      for (size_t axis_index = 0; axis_index < kAngularInterfaceCount;
            ++axis_index) {
-        const auto &resources = axis_index < kAngularInterfaceCount
-                                    ? hardware_info.joints
-                                    : hardware_info.gpios;
+        const auto &resources = hardware_info.joints;
         auto joint = std::find_if(
             resources.begin(), resources.end(), [&](const auto &joint) {
               return joint.name == public_joint_names_[axis_index];
             });
         if (joint == resources.end())
-          throw std::runtime_error("Missing public joint or actuator GPIO");
+          throw std::runtime_error("Missing public angular joint");
+        const double lower = std::stod(joint->parameters.at("lower"));
+        const double upper = std::stod(joint->parameters.at("upper"));
+        // The reference mapping uses raw joint limits. The footplate resource
+        // advertises limits in the public, toes-up-positive coordinate.
         position_lower_limits_[axis_index] =
-            std::stod(joint->parameters.at("lower"));
+            axis_index == FootPlate ? kin::kFootPitchMechanismSign * upper
+                                    : lower;
         position_upper_limits_[axis_index] =
-            std::stod(joint->parameters.at("upper"));
+            axis_index == FootPlate ? kin::kFootPitchMechanismSign * lower
+                                    : upper;
         velocity_limits_[axis_index] =
             std::stod(joint->parameters.at("velocity_limit"));
       }
+      // Every physical servo still needs its limits, even when the motor
+      // is outside the session's ros2_control resource mask.
+      std::istringstream motor_limits(
+          hardware_info.hardware_parameters.at("motor_limits"));
+      enabled_motors_ = 0;
+      for (const auto joint : PublicForAxis) {
+        if (!(motor_limits >> position_lower_limits_[joint] >>
+              position_upper_limits_[joint] >> velocity_limits_[joint]))
+          throw std::runtime_error("Malformed motor limits");
+        if (std::any_of(hardware_info.gpios.begin(), hardware_info.gpios.end(),
+                        [&](const auto &gpio) {
+                          return gpio.name == public_joint_names_[joint];
+                        }))
+          enabled_motors_ |= 1u << joint;
+      }
+      motor_limits >> std::ws;
+      if (!motor_limits.eof() || !enabled_motors_)
+        throw std::runtime_error("Invalid motor limits or motor resources");
+      enabled_angles_ = angles_for_motors(enabled_motors_);
       Limits limits{};
       for (const auto joint : PublicForAxis)
         if (!std::isfinite(limit_switch_offset_) || limit_switch_offset_ < 0 ||
@@ -463,8 +503,19 @@ public:
   std::vector<hardware_interface::StateInterface>
   export_state_interfaces() override {
     std::vector<hardware_interface::StateInterface> interfaces;
-    for (size_t joint_index = 0; joint_index < kPublicJointCount;
+    for (std::size_t i = 0; i < AngularCount; ++i) {
+      const auto name = public_joint_names_[i];
+      interfaces.emplace_back(name, "position", &angular_position_[i]);
+      interfaces.emplace_back(name, "velocity", &angular_velocity_[i]);
+      interfaces.emplace_back(name, "effort", &effort_[i]);
+      interfaces.emplace_back(name, "reverse_limit", &angular_reverse_[i]);
+      interfaces.emplace_back(name, "forward_limit", &angular_forward_[i]);
+      interfaces.emplace_back(name, "valid", &angular_valid_[i]);
+    }
+    for (size_t joint_index = AngularCount; joint_index < kPublicJointCount;
          ++joint_index) {
+      if (!(enabled_motors_ & (1u << joint_index)))
+        continue;
       interfaces.emplace_back(public_joint_names_[joint_index], "position",
                               &position_[joint_index]);
       interfaces.emplace_back(public_joint_names_[joint_index], "velocity",
@@ -473,10 +524,14 @@ public:
                               &effort_[joint_index]);
     }
     for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+      if (!(enabled_motors_ & (1u << PublicForAxis[axis])))
+        continue;
       const auto &name = public_joint_names_[PublicForAxis[axis]];
-      interfaces.emplace_back(name, "limit_switch_lower",
+      interfaces.emplace_back(name, "ready", &motor_ready_);
+      interfaces.emplace_back(name, "feedback_valid", &feedback_valid_);
+      interfaces.emplace_back(name, "reverse_limit",
                               &limit_switch_lower_[axis]);
-      interfaces.emplace_back(name, "limit_switch_upper",
+      interfaces.emplace_back(name, "forward_limit",
                               &limit_switch_upper_[axis]);
     }
     for (std::size_t i = 0; i < force_plates_.size(); ++i)
@@ -493,44 +548,130 @@ public:
   export_command_interfaces() override {
     std::vector<hardware_interface::CommandInterface> interfaces;
     for (size_t i = 0; i < kAngularInterfaceCount; ++i) {
+      if (!(enabled_angles_ & (1u << i)))
+        continue;
       interfaces.emplace_back(public_joint_names_[i], "position",
                               &angular_position_command_[i]);
       interfaces.emplace_back(public_joint_names_[i], "velocity",
                               &angular_velocity_command_[i]);
     }
     for (size_t axis = 0; axis < ActuatorCount; ++axis) {
+      if (!(enabled_motors_ & (1u << PublicForAxis[axis])))
+        continue;
       interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
                               "position", &actuator_position_command_[axis]);
       interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
                               "velocity", &actuator_velocity_command_[axis]);
+      interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
+                              "calibration_midpoint",
+                              &calibration_midpoint_[axis]);
+      interfaces.emplace_back(public_joint_names_[PublicForAxis[axis]],
+                              "calibration_half_travel",
+                              &calibration_half_travel_[axis]);
     }
     return interfaces;
   }
-  ReturnType prepare_command_mode_switch(
-      const std::vector<std::string> &start,
-      const std::vector<std::string> &stop) override {
-    return kin::plan_command_mode_switch(command_mode_.load(), start, stop)
+  ReturnType
+  prepare_command_mode_switch(const std::vector<std::string> &start,
+                              const std::vector<std::string> &stop) override {
+    const auto change =
+        kin::plan_command_mode_switch(command_claim_.load(), start, stop);
+    return change && (!change->reseed ||
+                      kin::angles_ready(change->claim, valid_angles_.load()))
                ? ReturnType::OK
                : ReturnType::ERROR;
   }
 
-  ReturnType perform_command_mode_switch(
-      const std::vector<std::string> &start,
-      const std::vector<std::string> &stop) override {
-    const auto change = kin::plan_command_mode_switch(command_mode_.load(), start, stop);
-    if (!change)
+  ReturnType
+  perform_command_mode_switch(const std::vector<std::string> &start,
+                              const std::vector<std::string> &stop) override {
+    const auto change =
+        kin::plan_command_mode_switch(command_claim_.load(), start, stop);
+    if (!change || (change->reseed &&
+                    !kin::angles_ready(change->claim, valid_angles_.load())))
       return ReturnType::ERROR;
     if (change->reseed) {
+      if (change->claim.calibration) {
+        calibration_midpoint_.fill(NAN);
+        calibration_half_travel_.fill(0);
+        invalidate_calibration();
+      }
       references_seeded_ = false;
       if (state_ready_)
         seed_references();
-      command_mode_.store(change->mode);
+      command_claim_.store(change->claim);
       ecm_->Component<PhysicsClockComponent>(model_entity_)
-          ->Data().angular_velocity_active =
-          active_ && change->mode == CommandMode::AngularVelocity;
+          ->Data()
+          .angular_velocity_active =
+          active_ && change->claim.mode == CommandMode::AngularVelocity;
     }
     return ReturnType::OK;
   }
+
+  void invalidate_calibration() {
+    calibrated_ = false;
+    angle_zero_.fill(0);
+    angular_valid_.fill(0);
+    valid_angles_.store(0);
+  }
+
+  void read_calibration(const kin::Coordinates &q,
+                        const kin::Coordinates &qdot) {
+    const auto claim = command_claim_.load();
+    if (claim.calibration && claim.calibration == enabled_motors_) {
+      kin::Coordinates zeros{};
+      bool complete = true;
+      for (std::size_t axis = 0; axis < ActuatorCount; ++axis) {
+        if (!(enabled_motors_ & (1u << PublicForAxis[axis])))
+          continue;
+        const auto midpoint = calibration_midpoint_[axis];
+        const auto half = calibration_half_travel_[axis];
+        const auto zero =
+            reference_mapping_.neutral_from_stroke(axis, midpoint, q[axis]);
+        complete &= std::isfinite(midpoint) && std::isfinite(half) &&
+                    half > 0 && bool(zero);
+        zeros[axis] = zero.position;
+      }
+      if (complete) {
+        angle_zero_ = zeros;
+        calibrated_ = true;
+      } else {
+        invalidate_calibration();
+      }
+    }
+
+    const auto pitch_limits = [&](std::size_t angle, std::size_t axis,
+                                  double mechanism_sign) {
+      const bool positive = measured_jacobian_[axis] * mechanism_sign > 0;
+      angular_reverse_[angle] =
+          positive ? limit_switch_lower_[axis] : limit_switch_upper_[axis];
+      angular_forward_[angle] =
+          positive ? limit_switch_upper_[axis] : limit_switch_lower_[axis];
+    };
+    pitch_limits(Backboard, kin::FramePitch, 1.);
+    pitch_limits(FootPlate, kin::FootPitch, kin::kFootPitchMechanismSign);
+    angular_reverse_[Ml] = limit_switch_lower_[kin::TorsoLateral] ||
+                           limit_switch_lower_[kin::HipLateral];
+    angular_forward_[Ml] = limit_switch_upper_[kin::TorsoLateral] ||
+                           limit_switch_upper_[kin::HipLateral];
+
+    kin::MlState ml;
+    if (calibrated_ && reference_mapping_.observe_ml(q, qdot, angle_zero_,
+                                                     ml) != kin::Error::None)
+      invalidate_calibration();
+    angular_position_ = {q[kin::FramePitch] - angle_zero_[kin::FramePitch],
+                         kin::kFootPitchMechanismSign *
+                             (q[kin::FootPitch] - angle_zero_[kin::FootPitch]),
+                         calibrated_ ? ml.position : position_[Ml]};
+    angular_velocity_ = {qdot[kin::FramePitch],
+                         kin::kFootPitchMechanismSign * qdot[kin::FootPitch],
+                         calibrated_ ? ml.velocity : velocity_[Ml]};
+    const unsigned valid = calibrated_ ? enabled_angles_ : 0;
+    for (std::size_t angle = 0; angle < AngularCount; ++angle)
+      angular_valid_[angle] = (valid & (1u << angle)) != 0;
+    valid_angles_.store(valid);
+  }
+
   hardware_interface::CallbackReturn
   on_activate(const rclcpp_lifecycle::State &) override {
     active_ = true;
@@ -538,20 +679,27 @@ public:
     if (state_ready_)
       seed_references();
     ecm_->Component<PhysicsClockComponent>(model_entity_)
-        ->Data().angular_velocity_active =
-        command_mode_.load() == CommandMode::AngularVelocity;
+        ->Data()
+        .angular_velocity_active =
+        command_claim_.load().mode == CommandMode::AngularVelocity;
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   hardware_interface::CallbackReturn
   on_deactivate(const rclcpp_lifecycle::State &) override {
     active_ = false;
+    invalidate_calibration();
     ecm_->Component<PhysicsClockComponent>(model_entity_)
-        ->Data().angular_velocity_active = false;
+        ->Data()
+        .angular_velocity_active = false;
     zero_drive_efforts();
     return hardware_interface::CallbackReturn::SUCCESS;
   }
   ReturnType read(const rclcpp::Time &, const rclcpp::Duration &) override {
     const rclcpp::Time now(physics_clock().time_ns, RCL_ROS_TIME);
+    if (now.seconds() < read_time_s_) {
+      calibration_midpoint_.fill(NAN);
+      invalidate_calibration();
+    }
     read_time_s_ = now.seconds();
     for (std::size_t i = 0; i < force_plates_.size(); ++i)
       force_plates_[i]->read(now.nanoseconds(), force_plate_timeouts_[i]);
@@ -579,10 +727,12 @@ public:
             position_[joint] >= position_upper_limits_[joint] -
                                     limit_switch_offset_ - switch_tolerance;
       }
+      read_calibration(q, qdot);
       physical_position_ = q;
       physical_velocity_ = qdot;
       effort_[Backboard] = drive_effort_[BackboardJoint];
-      effort_[FootPlate] = drive_effort_[FootPlateJoint];
+      effort_[FootPlate] =
+          kin::kFootPitchMechanismSign * drive_effort_[FootPlateJoint];
       const double tangent = std::tan(position_[Ml]);
       effort_[Ml] = (1 + tangent * tangent) *
                     (ml_heights_[0] * drive_effort_[TorsoJoint] +
@@ -606,8 +756,12 @@ public:
         state_pub_->publish(physical_msg_);
         last_state_publish_ns_ = now.nanoseconds();
       }
+      feedback_valid_ = 1;
       state_ready_ = true;
     } catch (const std::exception &ex) {
+      feedback_valid_ = 0;
+      calibration_midpoint_.fill(NAN);
+      invalidate_calibration();
       if (state_ready_) {
         // Empty components are tolerated only until the first successful
         // read.
@@ -629,10 +783,12 @@ public:
     if (last_write_ns_ >= 0 && write_time_ns < last_write_ns_) {
       previous_pitch_velocity_valid_ = false;
       references_seeded_ = false;
+      calibration_midpoint_.fill(NAN);
+      invalidate_calibration();
     }
     const double step_seconds = clock.step_ns * 1e-9;
     last_write_ns_ = write_time_ns;
-    if (!state_ready_) {
+    if (!state_ready_ || feedback_valid_ != 1) {
       zero_drive_efforts();
       return ReturnType::OK;
     }
@@ -654,9 +810,13 @@ public:
         return ReturnType::OK;
       if (!references_seeded_)
         seed_references();
-      const auto mode = command_mode_.load();
-      if (mode != CommandMode::None)
-        update_references(mode, step_seconds);
+      const auto claim = command_claim_.load();
+      if (!kin::angles_ready(claim, valid_angles_.load())) {
+        zero_drive_efforts();
+        return ReturnType::ERROR;
+      }
+      if (claim.mode != CommandMode::None)
+        update_references(claim, step_seconds);
 
       // 2. Pitch servos consume independent angular targets. Actuator modes
       // supplied these through the nonlinear inverse; reduced physics is

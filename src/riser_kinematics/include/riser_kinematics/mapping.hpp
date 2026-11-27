@@ -14,6 +14,9 @@ enum AxisIndex : std::size_t {
 using Coordinates = std::array<double, 4>;
 using Vector3 = std::array<double, 3>;
 
+// CAD and Gazebo raw foot pitch is positive toes-down.
+inline constexpr double kFootPitchMechanismSign = -1.;
+
 struct Domain {
   double lower, upper;
 }; // radians for pitch; metres for slides

@@ -13,6 +13,7 @@ enum CalibrationState {
   FINDING_NEG_LIMIT,
   FINDING_POS_LIMIT,
   GOING_HOME,
+  SETTLING_AT_HOME,
   HOME
 };
 
@@ -33,8 +34,6 @@ public:
                                            const rclcpp::Duration &) override;
 
 private:
-  // const std::array<std::string, kNumActuators> joint_names_{
-  //    "top_actuator", "torso_actuator", "hip_actuator", "bottom_actuator"};
   const std::array<std::string, kNumActuators> joint_names_{
       "top_motor", "torso_motor", "hip_motor", "bottom_motor"};
   struct Actuator {
@@ -45,6 +44,8 @@ private:
     hardware_interface::LoanedStateInterface *ready = nullptr;
     hardware_interface::LoanedStateInterface *feedback_valid = nullptr;
     hardware_interface::LoanedCommandInterface *command = nullptr;
+    hardware_interface::LoanedCommandInterface *midpoint = nullptr;
+    hardware_interface::LoanedCommandInterface *half_travel = nullptr;
     CalibrationState state = FINDING_NEG_LIMIT;
     double target_velocity = 0, lower_position = 0, upper_position = 0,
            initial_position = 0, home = 0;
@@ -61,6 +62,7 @@ private:
   std::size_t current_actuator_ = 0;
   double speed_m_s_ = 0, max_travel_m_ = 0;
   double phase_seconds_ = 0;
+  double settled_seconds_ = 0;
   bool started_ = false;
   bool failed_ = false;
 };

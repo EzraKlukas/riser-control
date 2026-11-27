@@ -123,8 +123,10 @@ int exercise(unsigned enabled, bool inhibited, bool calibrated) {
                                             "torso_motor", "hip_motor"}[i];
     keys.push_back(joint.name + "/velocity");
     hardware_interface::InterfaceInfo iface;
-    iface.name = "velocity";
-    joint.command_interfaces.push_back(iface);
+    for (const auto *name : {"velocity", "calibration_midpoint", "calibration_half_travel"}) {
+      iface.name = name;
+      joint.command_interfaces.push_back(iface);
+    }
     riser_hardware::G5Axis axis;
     std::vector<hardware_interface::StateInterface> states;
     axis.export_states(states);
@@ -142,25 +144,21 @@ int exercise(unsigned enabled, bool inhibited, bool calibrated) {
   }
   hardware_interface::ComponentInfo pitch;
   pitch.name = "foot_plate_pitch";
-  for (const std::string name : {"position", "velocity", "valid"}) {
+  for (const std::string name : {"position", "velocity", "valid", "reverse_limit",
+                                 "forward_limit"}) {
     hardware_interface::InterfaceInfo iface;
     iface.name = name;
     pitch.state_interfaces.push_back(iface);
-    if (name != "valid")
+    if (name == "position" || name == "velocity")
       pitch.command_interfaces.push_back(iface);
   }
   info.joints.push_back(pitch);
   auto &parameters = info.hardware_parameters;
-  if (calibrated) {
-    parameters["footplate_lower_rad"] = "-0.45";
-    parameters["footplate_upper_rad"] = "0.20";
-    parameters["footplate_rate_rad_s"] = "0.2";
-    parameters["footplate_zero_m"] = "0.05";
-    parameters["footplate_min_m"] = "-0.01";
-    parameters["footplate_max_m"] = "0.11";
-    parameters["footplate_direction"] = "-1";
-    parameters["footplate_position_gain_s_inv"] = "2";
-  }
+  parameters["footplate_lower_rad"] = "-0.45";
+  parameters["footplate_upper_rad"] = "0.20";
+  parameters["footplate_rate_rad_s"] = "0.2";
+  parameters["footplate_direction"] = "1"; // Positive carriage motion raises the toes.
+  parameters["footplate_position_gain_s_inv"] = "2";
   riser_hardware::BottomCsvSystem hw;
   rclcpp_lifecycle::State state;
   if (hw.on_init(params) != Callback::SUCCESS)
@@ -179,7 +177,7 @@ int exercise(unsigned enabled, bool inhibited, bool calibrated) {
   auto commands = hw.export_command_interfaces();
   auto states = hw.export_state_interfaces();
   const auto pitch_state = [&](size_t i) {
-    return states[states.size() - 3 + i].get_optional().value_or(NAN);
+    return states[states.size() - 5 + i].get_optional().value_or(NAN);
   };
   const std::string angle = "foot_plate_pitch/position";
   const std::string angular_rate = "foot_plate_pitch/velocity";
@@ -190,7 +188,7 @@ int exercise(unsigned enabled, bool inhibited, bool calibrated) {
     EC_WRITE_S8(domain.bytes.data() + offset.at(0x6061), 9);
     EC_WRITE_S32(domain.bytes.data() + offset.at(0x6064), 50);
     EC_WRITE_S32(domain.bytes.data() + offset.at(0x606c), 1);
-    if (!commands[i].set_value(i % 2 ? -.5 : .5))
+    if (!commands[3 * i].set_value(i % 2 ? -.5 : .5))
       return 5;
   }
   complete = true;
@@ -204,44 +202,66 @@ int exercise(unsigned enabled, bool inhibited, bool calibrated) {
             (inhibited ? 0 : (i % 2 ? -500 : 500)))
       return 6;
   }
-  if (!calibrated) {
-    if (pitch_state(0) || pitch_state(1) || pitch_state(2) ||
-        hw.prepare_command_mode_switch({angular_rate}, keys) != Result::ERROR)
-      return 11;
-  } else {
+  if (pitch_state(0) || pitch_state(1) || pitch_state(2) ||
+      hw.prepare_command_mode_switch({angular_rate}, keys) != Result::ERROR)
+    return 11;
+  if (calibrated && !inhibited) {
+    auto calibration = keys;
+    for (unsigned i = 0; i < enabled; ++i) {
+      const auto motor = keys[i].substr(0, keys[i].find('/'));
+      calibration.push_back(motor + "/calibration_midpoint");
+      calibration.push_back(motor + "/calibration_half_travel");
+    }
+    if (hw.perform_command_mode_switch(calibration, keys) != Result::OK ||
+        !commands[1].set_value(.05) || !commands[2].set_value(.06))
+      return 20;
+    hw.read(rclcpp::Time(0), period);
     using namespace riser_kinematics;
     Axis model;
     if (model.configure(canonical_geometry()[FootPitch], {-0.45, 0.20}) != Error::None)
       return 12;
     const double slope = -model.forward(0).jacobian;
-    if (pitch_state(2) != 1 || std::abs(pitch_state(0)) > 1e-10 ||
+    if (slope <= 0 || pitch_state(2) != 1 || std::abs(pitch_state(0)) > 1e-10 ||
         std::abs(pitch_state(1) - .001 / slope) > 1e-10 ||
-        hw.prepare_command_mode_switch({angle, angular_rate}, keys) != Result::ERROR ||
-        hw.prepare_command_mode_switch({angle, keys.front()}, keys) != Result::ERROR ||
+        hw.prepare_command_mode_switch({angle, angular_rate}, calibration) != Result::ERROR ||
+        hw.prepare_command_mode_switch({angle, keys.front()}, calibration) != Result::ERROR ||
         hw.prepare_command_mode_switch({angle}, {}) != Result::ERROR ||
-        hw.perform_command_mode_switch({angular_rate}, keys) != expected)
+        hw.perform_command_mode_switch({angular_rate}, calibration) != Result::OK)
       return 13;
     if (!inhibited) {
       auto *target = domain.bytes.data() + slaves[0].offsets.at(0x60ff);
       for (double rate : {-.08, .08}) {
-        if (!commands[enabled + 1].set_value(rate))
+        if (!commands[enabled * 3 + 1].set_value(rate))
           return 14;
         hw.write(rclcpp::Time(0), period);
         if (EC_READ_S32(target) != std::lround(1000 * slope * rate))
           return 15;
       }
       if (hw.perform_command_mode_switch({angle}, {angular_rate}) != Result::OK ||
-          !commands[enabled].set_value(.01))
+          !commands[enabled * 3].set_value(.01))
         return 16;
       hw.write(rclcpp::Time(0), period);
-      if (EC_READ_S32(target) != std::lround(-2000 * model.forward(.01).position))
+      if (EC_READ_S32(target) != std::lround(2000 * model.forward(-.01).position) ||
+          EC_READ_S32(target) <= 0)
         return 17;
+      // A discontinuity can invalidate the encoder reference even with a
+      // complete working counter and operation-enabled drive feedback.
+      auto *encoder = domain.bytes.data() + slaves[0].offsets.at(0x6064);
+      EC_WRITE_S32(encoder, 20);
+      hw.read(rclcpp::Time(0), period);
+      if (pitch_state(2) != 0)
+        return 21;
+      EC_WRITE_S32(encoder, 50);
+      hw.read(rclcpp::Time(0), period);
+      if (pitch_state(2) != 0)
+        return 22;
     }
   }
   complete = false;
   hw.read(rclcpp::Time(0), period);
   hw.write(rclcpp::Time(0), period);
-  if (pitch_state(0) || pitch_state(1) || pitch_state(2))
+  if (pitch_state(0) || pitch_state(1) || pitch_state(2) ||
+      hw.prepare_command_mode_switch({angular_rate}, {angle}) != Result::ERROR)
     return 18;
   for (unsigned i = 0; i < enabled; ++i)
     if (EC_READ_S32(domain.bytes.data() + slaves[i].offsets.at(0x60ff)) != 0)

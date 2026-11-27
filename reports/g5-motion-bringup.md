@@ -34,7 +34,7 @@ Example read-only upload on the verified single-drive bench, usable even with RO
 ```bash
 source /opt/ros/jazzy/setup.bash
 source ~/riser-control/install/setup.bash
-ros2 run riser_motion_bringup g5_upload 0 0 0 0x60fd 0 uint32
+ros2 run riser_motion g5_upload 0 0 0 0x60fd 0 uint32
 ```
 
 ## Powered-test prerequisites
@@ -61,7 +61,7 @@ cd ~/riser-control
 source /opt/ros/jazzy/setup.bash
 source install/setup.bash
 export ROS_DOMAIN_ID=63 ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
-ros2 launch riser_motion_bringup bottom_motor.launch.py drive_backend:=mock
+ros2 launch riser_motion bottom_motor.launch.py drive_backend:=mock
 ```
 
 On the laptop in the Jazzy workspace, run the following. Save the middleware, interface, discovery, sample rate and service response before selecting a persistent DDS profile. If any fail, collect both ends' network namespace, interface addresses, routes, ROS environment and multicast/firewall behavior with the network operator. An SSH login confirms only the management shell path.
@@ -85,7 +85,7 @@ The affected Jazzy C++ targets were built against the installed stock IgH header
 
 Mock trial `20261124T205648813312Z_mock_check` finalized to MCAP plus an NPZ. It contains 5,385 full-rate messages and 134 plot messages across 6.56 s including a pause. Observed whole-trial rates were 821.0 and 20.6 Hz. Largest receipt gaps were 1.16 and 1.20 s, spanning the pause. Excluding the single pause gap for each topic gives 997.3 and 25.1 Hz respectively. The recorder reported **one transport-layer message lost**. Offline topic selection retained exactly the 134 plot samples. In a headless two-window test on riserms, PlotJuggler 3.17.2 loaded the selected MCAP, and its live ROS subscriber continued on the 25 Hz topic. The live graph showed a single publisher, the `g5_plot` broadcaster. Laptop display, management-network latency/rates/drops and all connected behavior remain to be measured.
 
-No separate recorder script was located in this checkout or the archived Jetson tree. The host workflow wraps Jazzy rosbag2 and its pause/resume services. Supply the path or revision if a separate lab recorder needs compatibility checks. [Console, recording and calibration operation](../src/riser_motion_bringup/README.md)
+No separate recorder script was located in this checkout or the archived Jetson tree. The host workflow wraps Jazzy rosbag2 and its pause/resume services. Supply the path or revision if a separate lab recorder needs compatibility checks. [Console, recording and calibration operation](../src/riser_motion/README.md)
 
 ## Changed files
 
@@ -94,8 +94,8 @@ Paths below are relative to the repository root. The workspace retains the opera
 | Area | Files |
 |---|---|
 | Hardware in `src/riser_hardware/` | `CMakeLists.txt`, `package.xml`, `bottom_csv_plugins.xml`, `src/bottom_csv_system.cpp`, `src/g5_axis.hpp`, `include/riser_hardware/{csv_logic,g5_topology}.hpp`, `scripts/reset_g5_fault.sh`, `test/{csv_logic,g5_pdo,g5_system}_test.cpp`. Removed the obsolete `src/ethercat_boundary.cpp` and `plugins.xml`. |
-| Controller and configuration in `src/riser_motion_bringup/` | `CMakeLists.txt`, `package.xml`, `launch/bottom_motor.launch.py`, `config/{axes.yaml,controllers.yaml,g5_plot.xml}`, `src/motion_controller.cpp`, `include/riser_motion_bringup/jog.hpp`, `srv/Jog.srv`, `test/jog_test.cpp`, `test/mock_console.py`. |
-| Operator tools in `src/riser_motion_bringup/scripts/` | `g5_console`, `g5_jog`, `g5_upload`, `g5_trial`, `g5_plot_trial`, `g5_rebuild`. |
+| Controller and configuration in `src/riser_motion/` | `CMakeLists.txt`, `package.xml`, `launch/bottom_motor.launch.py`, `config/{axes.yaml,controllers.yaml,g5_plot.xml}`, `src/motion_controller.cpp`, `include/riser_motion/jog.hpp`, `srv/Jog.srv`, `test/jog_test.cpp`, `test/mock_console.py`. |
+| Operator tools in `src/riser_motion/scripts/` | `g5_console`, `g5_jog`, `g5_upload`, `g5_trial`, `g5_plot_trial`, `g5_rebuild`. |
 | Bringup in `src/riser_bringup/` | `CMakeLists.txt`, `package.xml`, `launch/control.launch.py`, `urdf/backends.xacro`, `scripts/g5_calibration.py`, `test/{test_g5_calibration,test_xacro}.py`. |
 | Balance in `src/riser_inverted_pendulum/` | `CMakeLists.txt`, `test/mode_test.cpp`, `include/riser_inverted_pendulum/inverted_pendulum_controller.hpp`, `src/inverted_pendulum_controller.cpp`. |
-| Handoff and trial storage | `README.md`, `src/riser_motion_bringup/README.md`, `reports/{g5-motion-bringup,riserms-ethercat-commissioning,riserms-realtime-setup}.md`, `.gitignore` (generated trial data). |
+| Handoff and trial storage | `README.md`, `src/riser_motion/README.md`, `reports/{g5-motion-bringup,riserms-ethercat-commissioning,riserms-realtime-setup}.md`, `.gitignore` (generated trial data). |

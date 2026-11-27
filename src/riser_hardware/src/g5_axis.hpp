@@ -12,13 +12,15 @@
 namespace riser_hardware {
 struct G5Axis {
   ec_slave_config_t *slave_ = nullptr;
-  std::string name, key;
+  std::string name, key, midpoint_key;
   double rated_torque = NAN;
   unsigned torque_offset{}, fault_offset{};
   unsigned cw_ = 0, target_ = 0, mode_ = 0, dio_ = 0, sw_ = 0, pos_ = 0,
            vel_ = 0, display_ = 0;
   double position_ = NAN, velocity_ = NAN, command_ = NAN, ready_ = 0,
          reverse_limit_ = NAN, forward_limit_ = NAN;
+  double calibration_midpoint = NAN, calibration_half_travel = 0;
+  bool calibrating = false;
   double digital_inputs = NAN, feedback_valid = 0, statusword = NAN,
          controlword = NAN, operating_mode = NAN, fault_code = NAN,
          torque_raw = NAN, torque_nm = NAN, brake_request = NAN,

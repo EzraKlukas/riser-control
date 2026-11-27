@@ -19,7 +19,7 @@ pass that file to the spawner with `--param-file`. The controller's interface
 configuration methods define its claims. Load controllers with competing claims
 inactive and switch them explicitly.
 
-The [G5 launch](../../riser_motion_bringup/launch/bottom_motor.launch.py)
+The [G5 launch](../../riser_motion/launch/bottom_motor.launch.py)
 generates the registration and parameters for `calibration_controller` from
 `axes.yaml` and loads it inactive. The motion bringup package declares the
 plugin as a runtime dependency.

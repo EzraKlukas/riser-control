@@ -58,6 +58,7 @@ private:
   void request_capture(logic::Capture, CaptureReply);
   void respond_to_capture();
 
+  std::size_t plate_count_ = 2;
   const std::array<std::string, 2> plate_names_{"left_force_plate",
                                                 "right_force_plate"};
   std::array<PlateInterfaces, 2> plate_interfaces_{};

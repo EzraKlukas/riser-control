@@ -289,13 +289,13 @@ Gazebo and full-robot EtherCAT boundary entry points are independent.
 cd ~/riser-control
 source /opt/ros/jazzy/setup.bash
 rosdep check --rosdistro jazzy --from-paths src --ignore-src
-colcon build --packages-up-to riser_motion_bringup riser_bringup \
+colcon build --packages-up-to riser_motion riser_bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DRISER_WITH_IGH=ON \
   -DIGH_INCLUDE_DIR=/opt/etherlab/include -DIGH_LIBRARY=/opt/etherlab/lib/libethercat.so
 source install/setup.bash
-colcon test --packages-select riser_hardware riser_motion_bringup riser_bringup
+colcon test --packages-select riser_hardware riser_motion riser_bringup
 colcon test-result --verbose
-ros2 launch riser_motion_bringup bottom_motor.launch.py --show-args
+ros2 launch riser_motion bottom_motor.launch.py --show-args
 ```
 
 The archived Sysmac snapshot uses 1:1 gearing and semi-closed motor
@@ -435,12 +435,12 @@ import sys
 from pathlib import Path
 import yaml
 
-config = yaml.safe_load(Path("src/riser_motion_bringup/config/controllers.yaml").read_text())
+config = yaml.safe_load(Path("src/riser_motion/config/controllers.yaml").read_text())
 config["controller_manager"]["ros__parameters"].update(
     cpu_affinity=3, lock_memory=True, thread_priority=80)
 Path(sys.argv[1]).write_text(yaml.safe_dump(config, sort_keys=False))
 PY
-ros2 launch riser_motion_bringup bottom_motor.launch.py \
+ros2 launch riser_motion bottom_motor.launch.py \
   product_code:=0x00000004 commissioning_disabled:=1 sync0_shift_ns:=650000 \
   controllers_file:="$RUN/controllers.yaml" \
   2>&1 | tee "$RUN/launch.log"
