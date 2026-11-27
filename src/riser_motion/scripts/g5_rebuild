@@ -1,0 +1,353 @@
+#!/usr/bin/env python3
+"""Cold restart an identified, released G5 manager after maintenance."""
+
+import argparse
+import fcntl
+import os
+import select
+import shlex
+import signal
+import subprocess
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+
+import rclpy
+from controller_manager_msgs.srv import ListControllers, ListHardwareComponents
+from rclpy.node import Node
+
+WORKSPACE = Path.home() / "riser-control"
+PACKAGES = [
+    "riser_motion",
+    "riser_calibration",
+    "riser_inverted_pendulum",
+    "riser_wrench_aggregation",
+]
+TRANSPORT_SETTINGS = (
+    "ROS_DOMAIN_ID",
+    "ROS_LOCALHOST_ONLY",
+    "ROS_AUTOMATIC_DISCOVERY_RANGE",
+    "ROS_STATIC_PEERS",
+    "ROS_DISCOVERY_SERVER",
+    "RMW_IMPLEMENTATION",
+    "CYCLONEDDS_URI",
+    "FASTDDS_DEFAULT_PROFILES_FILE",
+    "FASTRTPS_DEFAULT_PROFILES_FILE",
+    "RMW_FASTRTPS_USE_QOS_FROM_XML",
+    "FASTDDS_BUILTIN_TRANSPORTS",
+)
+
+
+def manager():
+    matches = []
+    for proc in Path("/proc").glob("[0-9]*"):
+        try:
+            if (proc / "exe").readlink().name != "ros2_control_node":
+                continue
+            matches.append(proc)
+        except (FileNotFoundError, PermissionError, ProcessLookupError):
+            continue
+    if not matches:
+        return None
+    if len(matches) != 1:
+        raise ValueError(
+            "Multiple local managers; stop the intended launch at its terminal"
+        )
+    proc = matches[0]
+    if proc.stat().st_uid != os.getuid():
+        raise ValueError("Manager belongs to another user")
+    env = dict(
+        item.split(b"=", 1)
+        for item in (proc / "environ").read_bytes().split(b"\0")
+        if b"=" in item
+    )
+    if env.get(b"ROS_DOMAIN_ID", b"0") != os.getenv("ROS_DOMAIN_ID", "0").encode():
+        raise ValueError("Controller manager is in another ROS domain")
+    parent = int(
+        next(
+            line
+            for line in (proc / "status").read_text().splitlines()
+            if line.startswith("PPid:")
+        ).split()[1]
+    )
+    argv = [
+        os.fsdecode(a)
+        for a in (Path("/proc") / str(parent) / "cmdline").read_bytes().split(b"\0")
+        if a
+    ]
+    try:
+        index = argv.index("launch")
+    except ValueError:
+        raise ValueError("Stop the manager at its owning launch terminal")
+    entry = argv[index + 1 : index + 3]
+    args = argv[index + 3 :]
+    if entry != ["riser_motion", "bottom_motor.launch.py"] and not (
+        entry == ["riser_bringup", "control.launch.py"] and "backend:=ethercat" in args
+    ):
+        raise ValueError("Only a G5 bench launch can be restarted here")
+    return (
+        parent,
+        int(proc.name),
+        ["ros2", "launch", *entry, *args],
+        (Path("/proc") / str(parent) / "cwd").resolve(strict=True),
+        {
+            key: os.fsdecode(env[key.encode()])
+            for key in TRANSPORT_SETTINGS
+            if key.encode() in env
+        },
+    )
+
+
+def call(node, service, name, timeout):
+    client = node.create_client(service, "/controller_manager/" + name)
+    try:
+        if not client.wait_for_service(timeout_sec=timeout):
+            raise TimeoutError(name + " unavailable")
+        future = client.call_async(service.Request())
+        rclpy.spin_until_future_complete(node, future, timeout_sec=timeout)
+        if not future.done():
+            raise TimeoutError(name + " timed out")
+        return future.result()
+    finally:
+        node.destroy_client(client)
+
+
+def stop_released(node, session, changing_mask):
+    parent, pid = session[:2]
+    # pidfds pin the verified processes while lifecycle preconditions are checked.
+    with (
+        os.fdopen(os.pidfd_open(parent), "rb", buffering=0) as launch_fd,
+        os.fdopen(os.pidfd_open(pid), "rb", buffering=0) as manager_fd,
+    ):
+        components = call(
+            node, ListHardwareComponents, "list_hardware_components", 4
+        ).component
+        if len(components) != 1 or components[0].name != "BottomMotor":
+            raise ValueError("Expected one BottomMotor hardware component")
+        hw = components[0]
+        if hw.plugin_name not in (
+            "mock_components/GenericSystem",
+            "riser_hardware/BottomCsvSystem",
+        ):
+            raise ValueError("Unexpected hardware plugin: " + hw.plugin_name)
+        if any(i.is_claimed for i in hw.command_interfaces):
+            raise ValueError("Deactivate every command owner first")
+        if (
+            hw.plugin_name == "riser_hardware/BottomCsvSystem"
+            and hw.state.label != "unconfigured"
+        ):
+            raise ValueError("Complete the ordered PREOP shutdown before maintenance")
+        if changing_mask and hw.state.label == "active":
+            raise ValueError("Inactivate the hardware before changing the mask")
+        signal.pidfd_send_signal(launch_fd.fileno(), signal.SIGINT)
+        for handle in (manager_fd, launch_fd):
+            poll = select.poll()
+            poll.register(handle, select.POLLIN)
+            if not poll.poll(12000):
+                raise TimeoutError("Old launch still running; inspect its terminal")
+    print(f"Stopped manager PID {pid}", flush=True)
+
+
+def saved_controllers(node, package):
+    saved = []
+    if not package:
+        return saved
+    controllers = call(node, ListControllers, "list_controllers", 4).controller
+    for controller in controllers:
+        if controller.type.split("/")[0] != package:
+            continue
+        # The launch regenerates the standard profiles from its named axis configuration.
+        if package == "riser_motion" and controller.name in (
+            "motor_profile",
+            "top_profile",
+            "hip_profile",
+            "torso_profile",
+        ):
+            continue
+        dump = subprocess.run(
+            ["ros2", "param", "dump", "/" + controller.name, "--timeout", "4"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=True,
+        )
+        with NamedTemporaryFile(
+            mode="w",
+            dir=WORKSPACE / "log",
+            prefix="g5-controller-",
+            suffix=".yaml",
+            delete=False,
+        ) as config:
+            config.write(dump.stdout)
+        saved.append((controller.name, controller.type, config.name))
+    return saved
+
+
+def restart(node, session, mask, saved):
+    _, old_pid, argv, cwd, _ = session
+    replacements = {"commissioning_disabled": "1", "load_motion_inactive": "true"}
+    if mask:
+        replacements["enabled_axes"] = mask
+    cmd = [a for a in argv if a.split(":=", 1)[0] not in replacements] + [
+        f"{k}:={v}" for k, v in replacements.items()
+    ]
+    logfile = (
+        WORKSPACE
+        / "log"
+        / datetime.now(UTC).strftime("g5-manager-%Y%m%dT%H%M%S%fZ.log")
+    )
+    print("$ " + shlex.join(cmd) + "\n" + str(logfile), flush=True)
+    with logfile.open("x") as log:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=log,
+            stderr=log,
+            start_new_session=True,
+        )
+    try:
+        deadline = time.monotonic() + 25
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise ValueError(logfile.read_text()[-4000:])
+            try:
+                controllers = call(
+                    node, ListControllers, "list_controllers", 1
+                ).controller
+            except TimeoutError:
+                continue
+            components = call(
+                node, ListHardwareComponents, "list_hardware_components", 2
+            ).component
+            if len(components) != 1:
+                continue
+            expected = {
+                "motor_profile"
+                if i.name == "bottom_motor/velocity"
+                else i.name.split("_motor/")[0] + "_profile"
+                for i in components[0].command_interfaces
+            }
+            states = {c.name: c.state for c in controllers}
+            current = manager()
+            if (
+                current
+                and current[0] == process.pid
+                and current[1] != old_pid
+                and expected
+                and all(states.get(name) == "inactive" for name in expected)
+            ):
+                for name, plugin, config in saved:
+                    subprocess.run(
+                        [
+                            "ros2",
+                            "param",
+                            "set",
+                            "/controller_manager",
+                            name + ".type",
+                            plugin,
+                        ],
+                        check=True,
+                        timeout=10,
+                    )
+                    subprocess.run(
+                        [
+                            "ros2",
+                            "run",
+                            "controller_manager",
+                            "spawner",
+                            name,
+                            "--inactive",
+                            "--param-file",
+                            config,
+                        ],
+                        check=True,
+                        timeout=20,
+                    )
+                if saved:
+                    states = {
+                        c.name: c.state
+                        for c in call(
+                            node, ListControllers, "list_controllers", 4
+                        ).controller
+                    }
+                    if any(states.get(name) != "inactive" for name, _, _ in saved):
+                        raise ValueError(
+                            "Rebuilt controller did not reach inactive state"
+                        )
+                print(
+                    f"Fresh inhibited manager PID {current[1]}, motion profiles inactive"
+                )
+                return
+            time.sleep(0.15)
+        raise TimeoutError("Inactive controller startup unconfirmed: " + str(logfile))
+    except BaseException:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            process.wait(timeout=10)
+        raise
+
+
+def main():
+    p = argparse.ArgumentParser()
+    group = p.add_mutually_exclusive_group(required=True)
+    group.add_argument("--package", choices=PACKAGES)
+    group.add_argument("--mask", help="Comma-separated enabled axis names")
+    group.add_argument("--stop", action="store_true")
+    args = p.parse_args()
+    if args.mask is not None:
+        axes = args.mask.split(",")
+        if len(set(axes)) != len(axes) or not set(axes) <= {
+            "bottom",
+            "top",
+            "torso",
+            "hip",
+        }:
+            p.error("Invalid enabled axis list")
+    (WORKSPACE / "log").mkdir(exist_ok=True)
+    with (WORKSPACE / "log/.g5-maintenance.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        session = manager()
+        if session:
+            # Reuse the live graph's management transport in this process and its
+            # replacement launch, including when maintenance came through SSH.
+            for key in TRANSPORT_SETTINGS:
+                os.environ.pop(key, None)
+            os.environ.update(session[4])
+        rclpy.init()
+        node = Node("g5_maintenance")
+        try:
+            saved = saved_controllers(node, args.package) if session else []
+            if session:
+                stop_released(node, session, bool(args.mask))
+            elif not args.package:
+                raise ValueError("No local G5 manager to maintain")
+            if args.package:
+                subprocess.run(
+                    [
+                        "colcon",
+                        "build",
+                        "--packages-select",
+                        args.package,
+                        "--event-handlers",
+                        "console_direct+",
+                    ],
+                    cwd=WORKSPACE,
+                    check=True,
+                )
+            if session and not args.stop:
+                restart(node, session, args.mask, saved)
+            elif args.package:
+                print("Build complete. Manager remains stopped.")
+        finally:
+            node.destroy_node()
+            rclpy.try_shutdown()
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        sys.exit(str(exc))

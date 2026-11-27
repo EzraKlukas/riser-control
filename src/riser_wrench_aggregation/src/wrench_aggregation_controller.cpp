@@ -47,9 +47,9 @@ std::vector<double> load_csv(const std::string &path) {
 controller_interface::InterfaceConfiguration
 WrenchAggregationController::state_interface_configuration() const {
   std::vector<std::string> names;
-  for (const auto &plate : plate_names_)
+  for (std::size_t i = 0; i < plate_count_; ++i)
     for (const auto *interface : PlateInterfaceNames)
-      names.push_back(plate + "/" + interface);
+      names.push_back(plate_names_[i] + "/" + interface);
   if (!read_time_interface_name_.empty())
     names.push_back(read_time_interface_name_);
   names.push_back(FootPitch);
@@ -100,6 +100,7 @@ Callback WrenchAggregationController::on_init() {
     auto_declare("right_wrench_transformation",
                  defaults.right.linear_transform);
     auto_declare("read_time_interface", std::string{});
+    auto_declare("right_plate_enabled", true);
     const logic::PerturbationParameters perturbation;
     auto_declare("perturbation.multisine_peak_nm", perturbation.multisine_peak_nm);
     auto_declare("perturbation.multisine_low_hz", perturbation.multisine_low_hz);
@@ -298,6 +299,7 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
       RCLCPP_ERROR(node->get_logger(), "%s", error);
       return Callback::ERROR;
     }
+    plate_count_ = node->get_parameter("right_plate_enabled").as_bool() ? 2 : 1;
     read_time_interface_name_ =
         node->get_parameter("read_time_interface").as_string();
     csv_configured_.store(csv_configured);
@@ -318,7 +320,7 @@ WrenchAggregationController::on_configure(const rclcpp_lifecycle::State &) {
 Callback
 WrenchAggregationController::on_activate(const rclcpp_lifecycle::State &) {
   reset();
-  for (std::size_t plate = 0; plate < plate_names_.size(); ++plate) {
+  for (std::size_t plate = 0; plate < plate_count_; ++plate) {
     for (std::size_t component = 0; component < PlateInterfaceNames.size();
          ++component) {
       const auto name =
@@ -400,8 +402,10 @@ bool WrenchAggregationController::read_sample(const PlateInterfaces &interfaces,
 }
 
 bool WrenchAggregationController::read_inputs(logic::Inputs &inputs) const {
+  if (plate_count_ == 1)
+    inputs.right.valid = true; // An omitted plate contributes zero wrench.
   return read_sample(plate_interfaces_[0], inputs.left) &&
-         read_sample(plate_interfaces_[1], inputs.right);
+         (plate_count_ == 1 || read_sample(plate_interfaces_[1], inputs.right));
 }
 
 void WrenchAggregationController::publish_sample(

@@ -39,14 +39,14 @@ riser_velocity_controller:
 
 riser_actuator_position_controller:
   ros__parameters:
-    joints: [top_actuator, torso_actuator, hip_actuator, bottom_actuator]
+    joints: [top_motor, torso_motor, hip_motor, bottom_motor]
     command_interfaces: [position]
     state_interfaces: [position, velocity]
     allow_partial_joints_goal: false
 
 riser_actuator_velocity_controller:
   ros__parameters:
-    joints: [top_actuator, torso_actuator, hip_actuator, bottom_actuator]
+    joints: [top_motor, torso_motor, hip_motor, bottom_motor]
     interface_name: velocity
 
 ankle_wrench:
@@ -94,3 +94,11 @@ ankle_wrench_plot_broadcaster:
     frame_id: ankle_wrench
     use_urdf_to_filter: false
     use_local_topics: true
+
+
+inverted_pendulum:
+  ros__parameters:
+    mode: footplate
+    max_rate_rad_s: 0.10
+    lower_pendulum_angle_rad: -0.06
+    upper_pendulum_angle_rad: 0.06

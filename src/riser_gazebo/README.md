@@ -89,16 +89,23 @@ write with valid state. A backward simulation-clock jump also reseeds references
 
 ## Simulated actuator limit switches
 
-Each of `top_actuator`, `torso_actuator`, `hip_actuator` and `bottom_actuator`
-exports `limit_switch_lower` and `limit_switch_upper` state interfaces, with
-`1.0` meaning hit and `0.0` meaning clear. Controllers can claim, for example,
-`torso_actuator/limit_switch_lower`. No switches are added to the angular
-resources. The four virtual actuators are declared as ros2_control GPIOs;
-limits are read from `HardwareInfo::gpios`. The adapter exports all fourteen
-command handles and twenty-nine motion/switch state handles, including eight
-switch handles. Force-plate sensor states are exported separately below.
-`joint_state_broadcaster.use_urdf_to_filter: false` retains actuator feedback on
-`/joint_states` despite the absence of physical actuator joints.
+The Gazebo export boundary maps to `top_motor`, `torso_motor`,
+`hip_motor` and `bottom_motor`. Carriage feedback is in metres and m/s.
+`reverse_limit` and `forward_limit` are active-high, and `ready` and
+`feedback_valid` expose the simulated operational state. The GPIO names are
+ROS resources. The physical joints keep their model names.
+`joint_state_broadcaster.use_urdf_to_filter: false` includes the GPIO feedback
+in the joint state stream.
+
+The shared calibration controller measures both switches and installs the
+midpoint. Angular motion claims require calibrated, valid contributing
+carriages. Angles expose `position`, `velocity`, `valid`, and the two
+directional switches. Positive public footplate pitch raises the toes, and
+positive backboard pitch leans forward. The physical joint stream uses raw
+Gazebo pitch. The pitch switch directions follow the public angle signs.
+The ML switches OR torso and hip forward together and reverse together.
+The same mode-switch path reserves the mechanism for calibration, motor
+profiles, angle profiles or the balance controller.
 
 Switches use measured neutral-relative actuator stroke, 3 mm inside each existing
 lower/upper hard stop, including overshoot and a 1e-10 m roundoff tolerance.
@@ -174,21 +181,20 @@ These are fixed geometric offsets, not encoder calibration.
 | Top | -0.335 | +0.335 | 0.67 |
 | Torso | -0.335 | +0.335 | 0.67 |
 | Hip | -0.335 | +0.335 | 0.67 |
-| Bottom | -0.08 | +0.24 | 0.32 |
+| Bottom | -0.08 | +0.08 | 0.16 |
 
 These estimated switch-to-switch ranges come from the user's approximate stroke
 measurements and neutral assumptions. Canonical linkage inversion gives backboard
-pitch approximately [-13.18,+12.40] degrees and footplate [-27.42,+12.65] degrees.
-Coupled ML spans +/-13.95 degrees. Both command families use these geometric
-position bounds; no additional angular software-limit layer is implemented.
+pitch approximately [-13.18,+12.40] degrees and footplate [-11.66,+12.65] degrees.
+Coupled ML spans +/-13.95 degrees. Both command families use these geometric position bounds. The balance controller
+adds its configured pendulum angle bounds.
 
 The Gazebo physical pitch and slide caps are each axis's travel divided by
 one simulated second. Backboard and footplate command caps are the same as
-their physical caps, about 0.4464 and 0.6993 rad/s. The ML rate cap is about
+their physical caps, about 0.4464 and 0.4242 rad/s. The ML rate cap is about
 0.4633 rad/s and keeps both expanded slide rates within 0.67 m/s across its
-range. The pendulum reads the backboard cap from the same ros2_control
-description. A positive `max_backboard_rate_rad_s` parameter can reduce the
-cap for an experiment.
+range. The pendulum reads the selected angle cap from the ros2_control description.
+A positive `max_rate_rad_s` can reduce that cap.
 The nonlinear pitch-to-stroke mapping can make a traverse in actuator mode
 take longer as the physical angular cap becomes active. Actual tracking
 depends on the servo, load, and approach to the switches. Use time-parameterized
@@ -205,27 +211,29 @@ and a Windows/CAD task prompt for generating wider tables.
 
 ## Startup modes and controllers
 
-Use `ros2 launch riser_bringup control.launch.py backend:=gazebo` with one of:
+Use `ros2 launch riser_bringup control.launch.py backend:=gazebo` for the
+[motion workflow](../riser_motion/README.md#bounded-motion). Calibration,
+profile and balance controllers start inactive. The original raw command
+controllers are available for development through the controller manager:
 
 | `command_mode` | Spawned controller | Joint order |
 | --- | --- | --- |
 | `angular_position` (legacy `position`) | `riser_position_controller` | backboard_pitch, foot_plate_pitch, ml_angle |
 | `angular_velocity` (legacy `velocity`) | `riser_velocity_controller` | same three angular joints |
-| `actuator_position` | `riser_actuator_position_controller` | top_actuator, torso_actuator, hip_actuator, bottom_actuator |
+| `actuator_position` | `riser_actuator_position_controller` | top_motor, torso_motor, hip_motor, bottom_motor |
 | `actuator_velocity` | `riser_actuator_velocity_controller` | same four actuator joints |
 
 Position controllers accept `JointTrajectory` commands; velocity controllers
-accept `Float64MultiArray` commands. Actuator commands use m or m/s; angles use
-rad or rad/s. Mock and the unimplemented EtherCAT boundary retain three joints;
-actuator startup modes are currently supported only by Gazebo.
+accept `Float64MultiArray` commands. Carriage commands use m or m/s and angle
+commands use rad or rad/s. `motion:=false` allows the raw carriage controllers
+to start in Gazebo when their `command_mode` is selected. Angular claims require
+calibration.
 
 ## Runtime switching
 
-The launch argument selects the first controller. After launch, use
-`ros2 control switch_controllers --strict` to stop the old motion controller
-and start the new one in one request. The Gazebo backend accepts one complete
-command family at a time: all three angular positions, all three angular
-velocities, all four actuator positions, or all four actuator velocities.
+Use `ros2 control switch_controllers --strict` to stop the old motion
+controller and start the new one in one request. A claim uses one command
+family and can select a subset of coordinates for profiles or balance.
 State consumers and broadcasters can remain active.
 
 `prepare_command_mode_switch()` checks the incoming and outgoing claim lists
@@ -240,19 +248,17 @@ are near the coupled neutral pose.
 
 ## Work still required before hardware operation
 
-An EtherCAT adapter can reuse the same claim policy and public resource names,
-then apply hardware-specific drive enable and reference seeding in its own mode
-hooks. The current EtherCAT boundary refuses activation. Homing/encoder offsets, switch inputs and local
-limit enforcement, communications-loss/watchdog behavior, verified speed and
-force limits, and measured loop latency are still required for hardware. The
-existing Gazebo loop also publishes ROS messages, creates component vectors and
-uses exceptions/logging on errors; it is not a hard realtime hardware template.
+See the [EtherCAT handoff](../riser_motion/README.md#laptop-gui-to-riserms-with-startup-inhibited)
+for the command contracts already exposed by the G5 backend and the remaining
+supervised checks. Gazebo's read and write paths use physics time, publish ROS
+state, and use exceptions and logging on errors. The hardware backend keeps its
+own cyclic guard and acquisition timestamps.
 
 ## Checks
 
 The [kinematics library tests](../riser_kinematics/README.md#integration-and-verification)
 check CAD geometry, mapping round trips and Python parity over the enlarged
-mechanical domains. Bringup tests check three Gazebo joints plus four GPIOs/fourteen command
-handles, three joints for other backends, startup modes, neutral poses and
-derived limits. These checks do not substitute for a full ROS/Gazebo build and
-live trajectory trials.
+mechanical domains. Bringup tests check three Gazebo angle resources and four
+carriage GPIOs, startup modes, neutral poses and derived limits. The
+[Gazebo motion test](../riser_bringup/test/gazebo_motion.py) exercises live
+calibration, controller switches and bounded playback.

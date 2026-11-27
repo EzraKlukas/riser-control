@@ -130,6 +130,12 @@
       "effort": 10000
     }
   },
+  "gazebo_foot_travel": {
+    "stroke_limit_m": 0.08,
+    "lower_pitch_rad": -0.20348207633011661,
+    "upper_pitch_rad": 0.22070887757756963,
+    "note": "Inverse CAD foot-pitch transmission at ±0.08 m from flat."
+  },
   "actuator_limits_provenance": "User measurements: top/torso/hip total travel about 0.67 m, neutral at midpoint; bottom total 0.32 m, flat neutral 0.08 m from the rearward (negative stroke) stop. Pitch endpoints invert evidence/model_reference/actuator_mapping.json on its original branches, using s=f(q_CAD)-f(neutral_cad). Neutral offsets are geometry, not session encoder calibration. See reports/motion-envelope.md.",
   "neutral_cad": {
     "frame_pitch": 0.001003136473,

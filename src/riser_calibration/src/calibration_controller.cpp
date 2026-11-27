@@ -16,6 +16,8 @@ read_state(const hardware_interface::LoanedStateInterface &state) {
       std::numeric_limits<double>::quiet_NaN());
 }
 
+constexpr double kInvalidMidpoint = std::numeric_limits<double>::quiet_NaN();
+
 // Resolve names once at activation; update() uses readable, checked handles.
 template <class Interfaces>
 auto find_interface(Interfaces &interfaces, const std::string &name) {
@@ -29,7 +31,8 @@ controller_interface::InterfaceConfiguration
 CalibrationController::command_interface_configuration() const {
   std::vector<std::string> names;
   for (const auto i : enabled_)
-    names.push_back(joint_names_[i] + "/velocity");
+    for (const auto *type : {"velocity", "calibration_midpoint", "calibration_half_travel"})
+      names.push_back(joint_names_[i] + "/" + type);
   return {controller_interface::interface_configuration_type::INDIVIDUAL,
           names};
 }
@@ -87,6 +90,8 @@ Callback CalibrationController::on_configure(const rclcpp_lifecycle::State &) {
           if (axis.name != joint_names_[i])
             continue;
           if (!has(axis.command_interfaces, "velocity") ||
+              !has(axis.command_interfaces, "calibration_midpoint") ||
+              !has(axis.command_interfaces, "calibration_half_travel") ||
               !has(axis.state_interfaces, "velocity") ||
               !has(axis.state_interfaces, "position") ||
               !has(axis.state_interfaces, "forward_limit") ||
@@ -135,7 +140,9 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
     a.feedback_valid =
         find_interface(state_interfaces_, name + "/feedback_valid");
     a.command = find_interface(command_interfaces_, name + "/velocity");
-    if (!a.position || !a.velocity || !a.lower_switch || !a.upper_switch ||
+    a.midpoint = find_interface(command_interfaces_, name + "/calibration_midpoint");
+    a.half_travel = find_interface(command_interfaces_, name + "/calibration_half_travel");
+    if (!a.midpoint || !a.half_travel || !a.position || !a.velocity || !a.lower_switch || !a.upper_switch ||
         !a.ready || !a.feedback_valid || !a.command) {
       RCLCPP_ERROR(get_node()->get_logger(), "Missing interface for %s",
                    name.c_str());
@@ -148,7 +155,9 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
     a.state = FINDING_NEG_LIMIT;
   }
   for (const auto i : enabled_)
-    if (!actuators_[i].command->set_value(actuators_[i].target_velocity)) {
+    if (!actuators_[i].command->set_value(0.) ||
+        !actuators_[i].midpoint->set_value(kInvalidMidpoint) ||
+        !actuators_[i].half_travel->set_value(0.)) {
       RCLCPP_ERROR(get_node()->get_logger(),
                    "Could not write calibration hold velocity target_velocity");
       return Callback::ERROR;
@@ -157,6 +166,7 @@ Callback CalibrationController::on_activate(const rclcpp_lifecycle::State &) {
     result.valid.store(false);
   current_actuator_ = 0;
   phase_seconds_ = 0;
+  settled_seconds_ = 0;
   started_ = false;
   failed_ = false;
   return Callback::SUCCESS;
@@ -180,11 +190,16 @@ Result CalibrationController::update(const rclcpp::Time &,
     return Result::OK;
   const auto fail = [&](const char *reason) {
     failed_ = true;
-    for (const auto i : enabled_)
-      if (!actuators_[i].command->set_value(0.)) {
+    for (const auto i : enabled_) {
+      auto &axis = actuators_[i];
+      results_[i].valid.store(false);
+      const bool stopped = axis.command->set_value(0.);
+      const bool invalidated = axis.midpoint->set_value(kInvalidMidpoint);
+      if (!stopped || !invalidated) {
         RCLCPP_ERROR(get_node()->get_logger(),
                      "Could not write calibration hold velocity");
       }
+    }
     RCLCPP_ERROR(get_node()->get_logger(), "Calibration stopped: %s", reason);
     return Result::ERROR;
   };
@@ -226,14 +241,17 @@ Result CalibrationController::update(const rclcpp::Time &,
                   joint_names_[index].c_str(), a.lower_position);
       a.target_velocity = 0.; // should I stay at zero velocity for a bit?
     } else {
+      if (std::abs(read_state(*a.position) - a.initial_position) > max_travel_m_)
+        return fail("reverse switch not found within travel budget");
       a.target_velocity = -speed_m_s_;
     }
     break;
   case FINDING_POS_LIMIT:
     if (read_state(*a.upper_switch)) {
       a.upper_position = read_state(*a.position);
-      if (a.upper_position <= a.lower_position)
-        return fail("upper limit is not above lower limit");
+      if (a.upper_position <= a.lower_position ||
+          a.upper_position - a.lower_position > max_travel_m_)
+        return fail("invalid inter-switch distance");
       // initially: home is halfway between limits.
       a.home = (a.lower_position + a.upper_position) / 2;
       if (!(a.lower_position < a.home && a.home < a.upper_position))
@@ -253,23 +271,42 @@ Result CalibrationController::update(const rclcpp::Time &,
     }
     break;
   case GOING_HOME:
-    // actually, I'm not going to fuss about correcting position if I overshoot
-    // home at first. Keep it simple, keep it safe.
-    if (read_state(*a.position) > a.home)
-      a.target_velocity = -speed_m_s_;
-    else {
+    if (read_state(*a.position) > a.home) {
+      const double remaining = read_state(*a.position) - a.home;
+      a.target_velocity = -std::min(speed_m_s_, std::max(speed_m_s_ * 0.1, remaining * 5));
+    } else {
       a.target_velocity = 0.;
-      if (!a.command->set_value(a.target_velocity))
-        return fail("could not write final velocity hold");
-      auto &result = results_[index];
-      result.negative.store(a.home - a.lower_position);
-      result.positive.store(a.upper_position - a.home);
-      result.valid.store(true);
+      a.state = SETTLING_AT_HOME;
+      phase_seconds_ = settled_seconds_ = 0;
+    }
+    break;
+  case SETTLING_AT_HOME:
+    if (std::abs(read_state(*a.velocity)) > speed_m_s_ * 0.02)
+      settled_seconds_ = 0;
+    else
+      settled_seconds_ += dt;
+    if (settled_seconds_ >= 0.15) {
       a.state = HOME;
       phase_seconds_ = 0;
-      RCLCPP_INFO(get_node()->get_logger(), "%s: home commanded",
-                  joint_names_[index].c_str());
       ++current_actuator_;
+      if (current_actuator_ == enabled_.size()) {
+        for (const auto i : enabled_) {
+          const auto &axis = actuators_[i];
+          const double half = axis.upper_position - axis.home;
+          if (!axis.half_travel->set_value(half) ||
+              !axis.midpoint->set_value(axis.home))
+            return fail("could not establish midpoint reference");
+        }
+        for (const auto i : enabled_) {
+          const auto &axis = actuators_[i];
+          auto &result = results_[i];
+          result.negative.store(axis.home - axis.lower_position);
+          result.positive.store(axis.upper_position - axis.home);
+          result.valid.store(true);
+          RCLCPP_INFO(get_node()->get_logger(), "%s: midpoint established",
+                      joint_names_[i].c_str());
+        }
+      }
       return Result::OK;
     }
     break;

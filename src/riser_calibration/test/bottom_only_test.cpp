@@ -18,7 +18,8 @@ int main(int argc, char **argv) {
     <ros2_control name="test_hardware" type="system"><hardware>
     <plugin>mock_components/GenericSystem</plugin></hardware>
     <joint name="bottom_motor">
-      <command_interface name="velocity"/><state_interface name="position"/>
+      <command_interface name="velocity"/><command_interface name="calibration_midpoint"/>
+      <command_interface name="calibration_half_travel"/><state_interface name="position"/>
       <state_interface name="velocity"/><state_interface name="ready"/>
       <state_interface name="feedback_valid"/>
       <state_interface name="reverse_limit"/><state_interface name="forward_limit"/>
@@ -34,16 +35,24 @@ int main(int argc, char **argv) {
   const rclcpp_lifecycle::State state;
   if (controller.on_configure(state) != Callback::SUCCESS ||
       controller.command_interface_configuration().names !=
-          std::vector<std::string>{"bottom_motor/velocity"} ||
+          std::vector<std::string>{"bottom_motor/velocity", "bottom_motor/calibration_midpoint",
+                                   "bottom_motor/calibration_half_travel"} ||
       controller.state_interface_configuration().names.size() != 6)
     return 2;
 
   double target = NAN, position = 0, velocity = 0, lower = 0, upper = 0;
+  double midpoint = 1., half_travel = 1.;
   double ready = 1, feedback_valid = 1;
   auto command = std::make_shared<hardware_interface::CommandInterface>(
       "bottom_motor", "velocity", &target);
   std::vector<hardware_interface::LoanedCommandInterface> commands;
   commands.emplace_back(command, nullptr);
+  const auto midpoint_command = std::make_shared<hardware_interface::CommandInterface>(
+      "bottom_motor", "calibration_midpoint", &midpoint);
+  const auto span_command = std::make_shared<hardware_interface::CommandInterface>(
+      "bottom_motor", "calibration_half_travel", &half_travel);
+  commands.emplace_back(midpoint_command, nullptr);
+  commands.emplace_back(span_command, nullptr);
   std::vector<hardware_interface::LoanedStateInterface> states;
   std::vector<std::shared_ptr<hardware_interface::StateInterface>> storage;
   for (const auto &[name, value] :
@@ -59,7 +68,8 @@ int main(int argc, char **argv) {
     states.emplace_back(storage.back());
   }
   controller.assign_interfaces(std::move(commands), std::move(states));
-  if (controller.on_activate(state) != Callback::SUCCESS)
+  if (controller.on_activate(state) != Callback::SUCCESS ||
+      !std::isnan(midpoint) || half_travel != 0)
     return 3;
   const auto step = [&] {
     return controller.update(rclcpp::Time(0),
@@ -79,11 +89,14 @@ int main(int argc, char **argv) {
   lower = 0;
   upper = 1;
   if (step() != Result::OK || target != 0 ||
-      step() != Result::OK || target != -.001)
+      step() != Result::OK || target != -.001 || !std::isnan(midpoint))
     return 5;
   upper = 0;
   position = .009;
-  if (step() != Result::OK || target != 0)
+  if (step() != Result::OK || target != 0 || !std::isnan(midpoint) ||
+      step() != Result::OK || step() != Result::OK ||
+      std::abs(midpoint - .01) > 1e-9 ||
+      std::abs(half_travel - .03) > 1e-9)
     return 6;
 
   rclcpp::executors::SingleThreadedExecutor executor;
@@ -105,7 +118,7 @@ int main(int argc, char **argv) {
         step() != Result::OK || target != -.001)
       return 8;
     *invalid = (invalid == &ready) ? 1 : 0;
-    if (step() != Result::ERROR || target != 0)
+    if (step() != Result::ERROR || target != 0 || !std::isnan(midpoint))
       return 9;
     ready = 2;
   }

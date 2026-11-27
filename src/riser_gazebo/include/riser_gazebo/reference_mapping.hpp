@@ -38,6 +38,15 @@ constexpr std::array<std::size_t, 4> PublicForAxis{TopActuator, TorsoActuator,
                                                    HipActuator, BottomActuator};
 constexpr std::array<std::size_t, 4> PhysicalForAxis{BackboardJoint, TorsoJoint,
                                                      HipJoint, FootPlateJoint};
+
+constexpr unsigned angles_for_motors(unsigned motors) {
+  constexpr unsigned backboard = 1u << TopActuator;
+  constexpr unsigned footplate = 1u << BottomActuator;
+  constexpr unsigned ml = (1u << TorsoActuator) | (1u << HipActuator);
+  return ((motors & backboard) ? 1u << Backboard : 0u) |
+         ((motors & footplate) ? 1u << FootPlate : 0u) |
+         ((motors & ml) == ml ? 1u << Ml : 0u);
+}
 // All four-element mapping/reference arrays use kin::AxisIndex, NOT Gazebo
 // order.
 struct JointLimit {
@@ -143,10 +152,29 @@ public:
     return kin::Error::None;
   }
 
+  kin::Sample neutral_from_stroke(std::size_t axis, double stroke,
+                                  double physical_seed) const noexcept {
+    auto result = axes_[axis].inverse(stroke + neutral_stroke_[axis],
+                                      physical_seed + neutral_cad_[axis]);
+    result.position -= neutral_cad_[axis];
+    return result;
+  }
+
+  kin::Error observe_ml(const kin::Coordinates &q, const kin::Coordinates &qdot,
+                        const kin::Coordinates &zero,
+                        kin::MlState &state) const {
+    return ml_.inverse({{q[kin::TorsoLateral] - zero[kin::TorsoLateral],
+                         q[kin::HipLateral] - zero[kin::HipLateral]},
+                        {qdot[kin::TorsoLateral], qdot[kin::HipLateral]}},
+                       state);
+  }
+
   kin::Error update(CommandMode mode, const PublicCoordinates &command,
                     double dt, PublicCoordinates &position,
                     PublicCoordinates &rate, kin::Coordinates &physical,
-                    kin::Coordinates &physical_rate) const noexcept {
+                    kin::Coordinates &physical_rate,
+                    unsigned selected = (1u << PublicJointCount) - 1,
+                    const kin::Coordinates &zero = {}) const noexcept {
     if (!ready_)
       return kin::Error::NotConfigured;
     if (mode == CommandMode::None)
@@ -162,6 +190,10 @@ public:
     const std::size_t first = angular(mode) ? Backboard : TopActuator;
     const std::size_t last = angular(mode) ? TopActuator : PublicJointCount;
     for (std::size_t i = first; i < last; ++i) {
+      if (!(selected & (1u << i))) {
+        v[i] = 0;
+        continue;
+      }
       if (!std::isfinite(command[i]))
         return kin::Error::NonfiniteInput;
       const auto &limit = limits_[i];
@@ -200,15 +232,15 @@ public:
           const auto pitch = (i == kin::FramePitch) ? Backboard : FootPlate;
           const double cap = limits_[pitch].velocity;
           const double step = cap * dt;
-          const double target = std::clamp(q[i], physical[i] - step,
-                                           physical[i] + step);
+          const double target =
+              std::clamp(q[i], physical[i] - step, physical[i] + step);
           if (target != q[i] || std::abs(qdot[i]) > cap) {
             q[i] = target;
             const auto accepted = axes_[i].forward(q[i] + neutral_cad_[i]);
             if (!accepted)
               return accepted.error;
-            const double rate_cap =
-                std::min(cap, limits_[j].velocity / std::abs(accepted.jacobian));
+            const double rate_cap = std::min(
+                cap, limits_[j].velocity / std::abs(accepted.jacobian));
             qdot[i] = std::clamp(qdot[i], -rate_cap, rate_cap);
             p[j] = accepted.position - neutral_stroke_[i];
             v[j] = accepted.jacobian * qdot[i];
@@ -231,13 +263,19 @@ public:
     } else {
       // 1. Angular references were already checked/integrated above. Expand ML
       // to physical slides; pitch coordinates remain independent of each other.
-      kin::SlideState slides;
-      const auto error = ml_.forward(p[Ml], v[Ml], slides);
-      if (error != kin::Error::None)
-        return error;
-      q = {p[Backboard], slides.position[0], slides.position[1], p[FootPlate]};
-      qdot = {v[Backboard], slides.velocity[0], slides.velocity[1],
-              v[FootPlate]};
+      q[kin::FramePitch] = p[Backboard];
+      q[kin::FootPitch] = p[FootPlate];
+      qdot = {v[Backboard], 0, 0, v[FootPlate]};
+      if (selected & (1u << Ml)) {
+        kin::SlideState slides;
+        const auto error = ml_.forward(p[Ml], v[Ml], slides);
+        if (error != kin::Error::None)
+          return error;
+        q[kin::TorsoLateral] = slides.position[0] + zero[kin::TorsoLateral];
+        q[kin::HipLateral] = slides.position[1] + zero[kin::HipLateral];
+        qdot[kin::TorsoLateral] = slides.velocity[0];
+        qdot[kin::HipLateral] = slides.velocity[1];
+      }
       for (std::size_t i = 0; i < ActuatorCount; ++i) {
         const auto mapped = axes_[i].forward(q[i] + neutral_cad_[i], qdot[i]);
         if (!mapped)
@@ -252,8 +290,8 @@ public:
         !bounded(FootPlate, p[FootPlate], v[FootPlate]))
       return kin::Error::OutsideDomain;
     for (const auto j : PublicForAxis) {
-      const bool derived_pitch = angular(mode) &&
-                                 (j == TopActuator || j == BottomActuator);
+      const bool derived_pitch =
+          angular(mode) && (j == TopActuator || j == BottomActuator);
       if (!std::isfinite(v[j]) || !bounded(j, p[j], derived_pitch ? 0. : v[j]))
         return kin::Error::OutsideDomain;
     }

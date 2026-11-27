@@ -24,107 +24,77 @@ In each additional terminal, source ROS and `install/setup.bash`.
 For the stock IgH G5 backend and laptop console, see the
 [G5 commissioning checklist](reports/g5-motion-bringup.md).
 
-## Explore
+## Bounded motion in Gazebo and on riserms
 
-Start Gazebo with the position controller:
-
-```bash
-ros2 launch riser_bringup control.launch.py backend:=gazebo plot:=false
-# Without the Gazebo GUI:
-ros2 launch riser_bringup control.launch.py backend:=gazebo headless:=true plot:=false wrench_input:=false
-```
-
-Run one launch at a time; stop it with Ctrl+C before starting another. `plot:=false`
-disables the optional PlotJuggler window, which launch otherwise opens by default.
-`wrench_input:=false` disables the optional subject wrench GUI for headless runs.
-For a kinematic preview with sliders, use
-`ros2 launch riser_bringup view.launch.py`. For controller experiments without
-physics, use `control.launch.py backend:=mock plot:=false`.
-
-In a second sourced terminal, inspect the active controllers and move all three
-coordinates slightly over five simulated seconds:
-
-```bash
-ros2 control list_controllers
-ros2 topic pub --once /riser_position_controller/joint_trajectory trajectory_msgs/msg/JointTrajectory \
-  '{joint_names: [backboard_pitch, foot_plate_pitch, ml_angle], points: [{positions: [0.02, -0.02, 0.01], time_from_start: {sec: 5}}]}'
-ros2 topic echo --once /joint_states
-ros2 topic echo --once /riser/force_plates/left/wrench
-```
-
-Commands use radians in the order `backboard_pitch`, `foot_plate_pitch`,
-`ml_angle`; zero is the saved CAD pose. Position is the default command mode.
-`command_mode:=velocity` selects the velocity controller, accepting a
-`std_msgs/msg/Float64MultiArray` on `/riser_velocity_controller/commands` in the
-same order, in rad/s. Send zeros to stop velocity commands. State feedback exposes
-position, velocity and effort; `/riser/physical_joint_states` gives the actual
-pitch and lateral-slide states used for TF.
-
-## G5 motor calibration
-
-The C++ calibration controller uses carriage position in metres and commands
-velocity in m/s. The G5 launch configures it inactive. For the switch sequence,
-shared limits, and passive GUI captures, see the
-[G5 calibration procedure](src/riser_motion_bringup/README.md#calibration-and-balance).
-
-## Simulated participant
-
-Launch Gazebo with participant support while leaving the platform empty.
+From the sourced workspace on your laptop:
 
 ```bash
 ros2 launch riser_bringup control.launch.py backend:=gazebo \
-  human:=true \
-  plot:=false wrench_input:=false
+  plot:=false plot_telemetry:=true wrench_input:=false
+# In a second sourced terminal with the console's Qt environment active
+ros2 run riser_motion g5_console --local-gazebo
 ```
 
-Add `headless:=true` for a numerical run. Wait for the platform to settle at its
-starting pose before taring it empty. Then spawn the participant, measure its
-mass, and capture the standing tare.
+Add `headless:=true` for server-only Gazebo. Startup loads the motion controllers
+inactive. Start with the [motion and calibration procedure](src/riser_motion/README.md#bounded-motion).
+It includes the GUI sequence, motion CSVs, trace names, an isolated Gazebo test,
+and inhibited startup on riserms.
+
+For a kinematic preview with sliders, use
+`ros2 launch riser_bringup view.launch.py`. For controller experiments without
+physics, use `control.launch.py backend:=mock plot:=false`.
+The physical pitch and lateral slide states for TF are on
+`/riser/physical_joint_states`.
+
+## Footplate-only simulated participant
+
+Start a fresh Gazebo session with the participant plugin available:
 
 ```bash
+ros2 launch riser_bringup control.launch.py backend:=gazebo human:=true \
+  plot_telemetry:=true plot:=false wrench_input:=false
+ros2 control switch_controllers --strict --activate calibration_controller
+```
+
+Wait for all four midpoints and then deactivate calibration. Let the empty
+platform settle near flat before taring it. The Gazebo balance configuration
+uses the participant model's known mass of 70 kg.
+
+```bash
+ros2 control switch_controllers --strict --deactivate calibration_controller
 ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: true}'
-ros2 run riser_human_balance spawn_participant --pulse-nm 18
-ros2 service call /ankle_wrench/measure_mass std_srvs/srv/Trigger '{}'
-ros2 param get /ankle_wrench subject_mass_kg
-ros2 service call /ankle_wrench/tare std_srvs/srv/SetBool '{data: false}'
 ```
 
-Wait for each service to complete successfully. The participant is 1.70 m tall
-and has 70 kg of Gazebo rigid-body mass. Its two visible feet form a single
-rigid base welded to the left instrumented plate, so use the **summed** wrench
-for weighing. The body has one sagittal ankle hinge. A pitch spring and damper
-act between the body and board and leave the weight supported through the feet.
-The footplate is held at its home pitch, and ML balance is outside this model.
-
-Load the robot pendulum with the matching height, then switch from the position
-controller. The participant starts ankle balance on the first physics step in
-angular velocity mode.
+With the local console, choose `foot_plate_pitch` / **position**, activate
+the selected controller, and preview and start
+[footplate_initial_pitch.csv](src/riser_motion/config/footplate_initial_pitch.csv).
+It adds 0.035 rad to the settled starting position. Leave the position
+controller active to hold the tilted plate while you spawn the participant.
+Then switch to the footplate velocity balance controller.
 
 ```bash
-ros2 run controller_manager spawner inverted_pendulum --inactive \
-  --param-file "$(ros2 pkg prefix --share riser_human_balance)/config/pendulum.yaml"
+ros2 run riser_human_balance spawn_participant --footplate-only
 ros2 control switch_controllers --strict \
-  --deactivate riser_position_controller --activate inverted_pendulum
-```
-
-The ankle controller uses upright angle and angular velocity feedback. The
-robot integrates the pendulum's backboard velocity with the controller period
-and caps it at the configured backboard rate. The optional pulse adds ankle
-torque for 0.65 simulated seconds to make recovery observable. Omit
-`--pulse-nm` for an unperturbed start. To repeat from empty, restart the
-launch. `human:=false` is the default.
-
-```bash
+  --deactivate angle_position_profile --activate inverted_pendulum
 gz topic -e -t /riser/human_balance
 ```
 
-Telemetry reports simulation time, body pitch, backboard pitch, footplate pitch,
-ankle torque, strap torque, and a balance-active flag, in that order. Angles are
-in radians and torques are in N m.
+A vertical guide holds body orientation in the world while allowing vertical
+translation and weight transfer through the feet. The feet articulate through
+the ankle hinge and contact the plates. The goal is zero world foot pitch,
+which is also neutral ankle pitch with an upright body. The footplate run leaves
+the backboard at its held reference.
 
-To add a multisine or play a CSV torque signal while the participant balances,
-follow the [AP perturbation tutorial](src/riser_bringup/config/perturbation-tutorial.md).
-It includes the 25 Hz PlotJuggler stream and the ros2_control introspection example.
+The participant stream reports simulated seconds, world body pitch, world foot
+pitch, and applied ankle torque in that order. Compare those with actual
+`foot_plate_pitch` from `/riser/physical_joint_states` and
+`ankle_wrench/torque.x` from
+`/ankle_wrench_plot_broadcaster/dynamic_joint_states`. Angles and torques
+are in rad and N·m. To repeat the experiment from an empty platform, restart
+the launch.
+
+For output ankle-wrench perturbations, see the
+[AP perturbation tutorial](src/riser_bringup/config/perturbation-tutorial.md).
 
 ## Force plates and model details
 
@@ -147,7 +117,17 @@ The wrench topics report in the Gazebo plate frames. See the [Gazebo interface r
 Gazebo bringup also runs `ankle_wrench`, exporting the combined wrench at the
 ankle midpoint in physical axes attached to the foot platform. Inspect all eight
 output states on `/ankle_wrench_state_broadcaster/dynamic_joint_states`, including
-`valid` and `sample_time`. Matrices, gains and moment arms are in
+`valid` and `sample_time`.
+
+For plotting at 25 Hz, select
+`/ankle_wrench_plot_broadcaster/dynamic_joint_states` in PlotJuggler. This feed
+also includes the pre-perturbation ankle torque and measured subject mass.
+In Gazebo, `plot_telemetry:=true` enables the feed with `plot:=false`. The
+real G5 launch enables it with `force_plates:=true`. Check the received rate with
+`ros2 topic hz /ankle_wrench_plot_broadcaster/dynamic_joint_states`. In Gazebo
+the received rate follows the simulation speed.
+
+Matrices, gains and moment arms are in
 `src/riser_bringup/config/controllers.yaml`; see the
 [parameter and frame reference](src/riser_bringup/config/README.md#ankle-wrench).
 Factory calibration is kept separately in that directory and is bypassed for

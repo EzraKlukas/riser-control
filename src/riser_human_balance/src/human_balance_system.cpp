@@ -9,6 +9,7 @@
 #include <gz/sim/Link.hh>
 #include <gz/sim/Model.hh>
 #include <gz/sim/System.hh>
+#include <gz/sim/Util.hh>
 #include <gz/sim/components/DetachableJoint.hh>
 #include <gz/sim/components/JointForceCmd.hh>
 #include <gz/sim/components/JointPosition.hh>
@@ -16,6 +17,7 @@
 #include <gz/sim/components/Model.hh>
 #include <gz/sim/components/Name.hh>
 #include <gz/transport/Node.hh>
+#include <initializer_list>
 #include <limits>
 #include <optional>
 
@@ -35,6 +37,7 @@ public:
     body_ = participant_.LinkByName(ecm, "body");
     feet_ = participant_.LinkByName(ecm, "feet");
     pulse_nm_ = sdf->Get<double>("pulse_nm", 0.).first;
+    footplate_only_ = sdf->Get<bool>("footplate_only", false).first;
     if (ankle_ == sim::kNullEntity || body_ == sim::kNullEntity ||
         feet_ == sim::kNullEntity || !std::isfinite(pulse_nm_) ||
         std::abs(pulse_nm_) > 50.) {
@@ -43,6 +46,8 @@ public:
     }
     sim::Joint(ankle_).EnablePositionCheck(ecm);
     sim::Joint(ankle_).EnableVelocityCheck(ecm);
+    if (footplate_only_)
+      sim::Link(feet_).EnableVelocityChecks(ecm);
     ecm.CreateComponent(ankle_, sim::components::JointForceCmd({0.}));
     telemetry_ =
         transport_.Advertise<gz::msgs::Double_V>("/riser/human_balance");
@@ -58,6 +63,21 @@ public:
 
     auto &ankle_command =
         ecm.Component<sim::components::JointForceCmd>(ankle_)->Data()[0];
+    const double now_s = std::chrono::duration<double>(info.simTime).count();
+    if (footplate_only_) {
+      const auto rate = sim::Link(feet_).WorldAngularVelocity(ecm);
+      if (!rate) {
+        ankle_command = 0.;
+        return;
+      }
+      const double foot_angle = sim::worldPose(feet_, ecm).Rot().Pitch();
+      const double body_angle = sim::worldPose(body_, ecm).Rot().Pitch();
+      // The guide holds the body upright. Neutral relative ankle pitch is
+      // world-level feet. The contact plate receives the ankle reaction.
+      ankle_command = ankle_torque_nm({foot_angle, rate->Y()}, 1., 0.);
+      publish(now_s, {body_angle, foot_angle, ankle_command});
+      return;
+    }
     const auto *clock =
         ecm.Component<riser_gazebo::PhysicsClockComponent>(robot_);
     const auto foot = read_pitch(ecm, foot_pitch_);
@@ -69,7 +89,6 @@ public:
     }
     const Pitch body{foot->angle_rad + ankle->angle_rad,
                      foot->rate_rad_s + ankle->rate_rad_s};
-    const double now_s = std::chrono::duration<double>(info.simTime).count();
     if (!clock->Data().angular_velocity_active)
       held_before_release_ = true;
     const bool active =
@@ -89,23 +108,31 @@ public:
     sim::Link(body_).AddWorldWrench(ecm, {}, {0., strap, 0.});
     sim::Link(backboard_).AddWorldWrench(ecm, {}, {0., -strap, 0.});
 
+    publish(now_s, {body.angle_rad, board->angle_rad, foot->angle_rad,
+                    ankle_command, strap, active ? 1. : 0.});
+  }
+
+private:
+  void publish(double now_s, std::initializer_list<double> samples) {
     if (now_s - last_publish_s_ >= 0.02 && telemetry_.HasConnections()) {
       gz::msgs::Double_V message;
-      for (const double value :
-           {now_s, body.angle_rad, board->angle_rad, foot->angle_rad,
-            ankle_command, strap, active ? 1. : 0.})
+      message.add_data(now_s);
+      for (const double value : samples)
         message.add_data(value);
       telemetry_.Publish(message);
       last_publish_s_ = now_s;
     }
   }
 
-private:
   bool attach(sim::EntityComponentManager &ecm) {
     const auto robot = ecm.EntityByComponents(sim::components::Model(),
                                               sim::components::Name("riser"));
     if (robot == sim::kNullEntity)
       return false;
+    if (footplate_only_) {
+      robot_ = robot;
+      return true;
+    }
     const sim::Model model(robot);
     const auto plate = model.LinkByName(ecm, "left_force_plate");
     backboard_ = model.LinkByName(ecm, "tilt_frame");
@@ -144,6 +171,7 @@ private:
               backboard_pitch_ = sim::kNullEntity,
               backboard_ = sim::kNullEntity;
   bool configured_ = false;
+  bool footplate_only_ = false;
   bool held_before_release_ = false;
   double pulse_nm_ = 0.;
   std::optional<double> release_time_s_;

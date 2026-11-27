@@ -32,6 +32,13 @@ def test_actuator_bounds_and_angular_speed_envelope():
             s = mapping.forward(q) - zero
             assert stroke['lower']-1e-12 <= s <= stroke['upper']+1e-12
             assert abs(mapping.derivative(q)*physical['velocity']) <= stroke['velocity']+1e-12
+    gazebo = config["gazebo_foot_travel"]
+    foot = maps["foot_pitch"]
+    flat = foot.forward(neutral["foot_pitch"])
+    ends = sorted(foot.forward(gazebo[key] + neutral["foot_pitch"]) - flat
+                  for key in ("lower_pitch_rad", "upper_pitch_rad"))
+    assert math.isclose(ends[0], -gazebo["stroke_limit_m"], abs_tol=1e-12)
+    assert math.isclose(ends[1], gazebo["stroke_limit_m"], abs_tol=1e-12)
     c = json.loads((ROOT / 'src/riser_bringup/config/control_coordinates.json').read_text())['ml']
     for name, h in c['height_m'].items():
         physical = k[name + '_lateral']

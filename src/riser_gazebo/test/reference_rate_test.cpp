@@ -3,6 +3,12 @@
 
 int main() {
   using namespace riser_gazebo;
+  static_assert(angles_for_motors(1u << BottomActuator) == (1u << FootPlate));
+  static_assert(angles_for_motors(1u << TopActuator) == (1u << Backboard));
+  static_assert(angles_for_motors(1u << TorsoActuator) == 0);
+  static_assert(angles_for_motors(1u << HipActuator) == 0);
+  static_assert(angles_for_motors((1u << TorsoActuator) | (1u << HipActuator)) ==
+                (1u << Ml));
   constexpr double period_s = .001;
   constexpr double board_lower = -.23006989930207766;
   constexpr double board_upper = .216348932826856;

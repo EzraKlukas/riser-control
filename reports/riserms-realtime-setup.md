@@ -115,16 +115,16 @@ measurements. This host uses stock code at the IgH 1.6.13 revision above.
 cd /home/smplab/riser-control
 source /opt/ros/jazzy/setup.bash
 rosdep check --rosdistro jazzy --from-paths src --ignore-src
-colcon build --packages-up-to riser_motion_bringup riser_bringup \
+colcon build --packages-up-to riser_motion riser_bringup \
   --cmake-args -DCMAKE_BUILD_TYPE=Release -DRISER_WITH_IGH=ON \
   -DIGH_INCLUDE_DIR=/opt/etherlab/include -DIGH_LIBRARY=/opt/etherlab/lib/libethercat.so \
   --no-warn-unused-cli
 source install/setup.bash
 ldd install/riser_hardware/lib/libriser_bottom_csv.so | grep libethercat
-colcon test --packages-select riser_hardware riser_motion_bringup riser_bringup \
+colcon test --packages-select riser_hardware riser_motion riser_bringup \
   --return-code-on-test-failure
 colcon test-result --verbose
-ros2 launch riser_motion_bringup bottom_motor.launch.py --show-args
+ros2 launch riser_motion bottom_motor.launch.py --show-args
 ```
 
 Ten production packages built against the installed library, and all
@@ -365,7 +365,7 @@ import sys
 from pathlib import Path
 import yaml
 
-config = yaml.safe_load(Path("src/riser_motion_bringup/config/controllers.yaml").read_text())
+config = yaml.safe_load(Path("src/riser_motion/config/controllers.yaml").read_text())
 config["controller_manager"]["ros__parameters"].update(
     cpu_affinity=3, lock_memory=True, thread_priority=80)
 config["motor_profile"]["ros__parameters"]["speed_m_s"] = 0.0
@@ -374,7 +374,7 @@ PY
 # Repeat the launch with FEEDBACK=true for the second run.
 FEEDBACK=false
 # The launch reads the commissioning limits from axes.yaml.
-ros2 launch riser_motion_bringup bottom_motor.launch.py \
+ros2 launch riser_motion bottom_motor.launch.py \
   commissioning_disabled:=1 sync0_shift_ns:=650000 feedback:="$FEEDBACK" \
   controllers_file:="$RUN/controllers.yaml" \
   2>&1 | tee "$RUN/disabled-launch.log"
@@ -419,7 +419,7 @@ From idle/PREOP, use the same zero-speed YAML and approved guard limits.
 This time the launch loads `motor_profile` inactive.
 
 ```bash
-ros2 launch riser_motion_bringup bottom_motor.launch.py \
+ros2 launch riser_motion bottom_motor.launch.py \
   commissioning_disabled:=0 sync0_shift_ns:=650000 \
   controllers_file:="$RUN/controllers.yaml" \
   2>&1 | tee "$RUN/hold-launch.log"
@@ -432,7 +432,7 @@ confirm stationary, finite feedback with `ready=1`. Record the
 initial position.
 
 ```bash
-ros2 run riser_motion_bringup g5_trial start zero_hold /dynamic_joint_states /g5_plot/dynamic_joint_states
+ros2 run riser_motion g5_trial start zero_hold /dynamic_joint_states /g5_plot/dynamic_joint_states
 ros2 topic echo /dynamic_joint_states
 ```
 
@@ -469,7 +469,7 @@ bash src/riser_hardware/scripts/shutdown_bottom_motor.sh --stop-profile
 ```
 
 Confirm idle/PREOP, zero alarm and detail, and a disabled statusword.
-Then finalize the recording with `ros2 run riser_motion_bringup g5_trial stop`, retain its reported rates and loss counts, and stop the launch.
+Then finalize the recording with `ros2 run riser_motion g5_trial stop`, retain its reported rates and loss counts, and stop the launch.
 
 ## Remote LUKS unlock
 

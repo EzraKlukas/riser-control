@@ -5,29 +5,37 @@ int main() {
   logic::InvertedPendulumLogic model;
   constexpr double test_rate_limit = 0.02;
   logic::Parameters parameters;
-  parameters.max_backboard_rate_rad_s = test_rate_limit;
-  if (model.configure(parameters) || model.activate(70.))
+  parameters.max_rate_rad_s = test_rate_limit;
+  if (model.configure(parameters) || !model.activate(0.) || model.activate(70.))
     return 1;
 
   logic::Inputs inputs{};
-  inputs.ankle_wrench = {30., 0., 1., true};
+  inputs.ankle_wrench = {-30., 0., 1., true};
   const auto first = model.update(inputs, 1., 0.001);
   const auto second = model.update(inputs, 1.002, 0.002);
-  const double rate = first.velocity_commands[THETA_BB];
+  const double rate = first.velocity_command;
   if (first.error || second.error || rate <= 0. ||
-      std::abs(second.velocity_commands[THETA_BB] - 3. * rate) > 1e-12)
+      std::abs(second.velocity_command - 3. * rate) > 1e-12)
     return 1;
 
-  if (model.update(inputs, 1.1, 0.1).velocity_commands[THETA_BB] != test_rate_limit)
+  if (model.update(inputs, 1.1, 0.1).velocity_command != test_rate_limit)
     return 1;
-  inputs.ankle_wrench.T_x = -30.;
-  if (model.update(inputs, 1.101, 0.001).velocity_commands[THETA_BB] >= test_rate_limit)
+  inputs.ankle_wrench.T_x = 30.;
+  if (model.update(inputs, 1.101, 0.001).velocity_command >= test_rate_limit)
     return 1;
 
   model.deactivate();
   if (model.activate(70.))
     return 1;
   inputs.ankle_wrench.T_x = 0.;
-  if (model.update(inputs, 2., 0.001).velocity_commands[THETA_BB] != 0.)
+  if (model.update(inputs, 2., 0.001).velocity_command != 0.)
+    return 1;
+  inputs.angle.position = parameters.upper_pendulum_angle_rad;
+  const auto at_soft_limit = model.update(inputs, 2.001, 0.001);
+  if (at_soft_limit.error || std::abs(at_soft_limit.velocity_command) > test_rate_limit)
+    return 1;
+  inputs.forward_limit = true;
+  const auto stopped = model.update(inputs, 2.002, 0.001);
+  if (stopped.error || stopped.velocity_command != 0.)
     return 1;
 }

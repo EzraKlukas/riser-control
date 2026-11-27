@@ -2,6 +2,7 @@
 """Spawn the optional participant with its rigid feet parallel to the plate."""
 
 import argparse
+from copy import deepcopy
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
@@ -17,9 +18,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pulse-nm", type=float, default=0.0,
                         help="Brief ankle torque perturbation at release (N m)")
+    parser.add_argument("--footplate-only", action="store_true",
+                        help="Hold the body upright and let the feet contact the tilting plate")
     args = parser.parse_args()
     if not -50.0 <= args.pulse_nm <= 50.0:
         parser.error("--pulse-nm must be between -50 and 50")
+    if args.footplate_only and args.pulse_nm:
+        parser.error("--pulse-nm applies to backboard experiments")
 
     rclpy.init()
     node = rclpy.create_node("spawn_participant")
@@ -35,17 +40,45 @@ def main():
         parser.error("No footplate feedback. Start and home the Gazebo robot first.")
     axis = feedback.name.index("foot_plate_pitch")
     pitch = feedback.position[axis]
-    if not (abs(pitch) <= 0.01 and abs(feedback.velocity[axis]) <= 0.005):
+    if abs(feedback.velocity[axis]) > 0.005:
+        parser.error("Wait for the footplate to settle.")
+    if args.footplate_only:
+        if not 0.015 <= abs(pitch) <= 0.06:
+            parser.error("Set a starting footplate pitch between 0.015 and 0.06 rad in magnitude.")
+    elif abs(pitch) > 0.01:
         parser.error("Wait for the footplate to settle within 0.01 rad of flat.")
 
     share = Path(get_package_share_directory("riser_human_balance"))
     sdf = ET.parse(share / "models/participant.sdf").getroot()
     sdf.find("model/plugin/pulse_nm").text = str(args.pulse_nm)
+    if args.footplate_only:
+        model = sdf.find("model")
+        feet = model.find("link[@name='feet']")
+        ET.SubElement(feet, "pose").text = f"0 0 0 0 {pitch} 0"
+        for foot in feet.findall("visual"):
+            collision = ET.SubElement(feet, "collision", name=f"{foot.get('name')}_contact")
+            collision.append(deepcopy(foot.find("pose")))
+            collision.append(deepcopy(foot.find("geometry")))
+        # Keep body orientation fixed in the world while its weight loads the
+        # foot contacts. Relative ankle motion is via the existing pitch hinge.
+        ankle = model.find("joint[@name='ankle']")
+        ankle.find("parent").text = "body"
+        ankle.find("child").text = "feet"
+        guide = ET.SubElement(model, "joint", name="upright_guide", type="prismatic")
+        ET.SubElement(guide, "parent").text = "world"
+        ET.SubElement(guide, "child").text = "body"
+        axis = ET.SubElement(guide, "axis")
+        ET.SubElement(axis, "xyz").text = "0 0 1"
+        limit = ET.SubElement(axis, "limit")
+        ET.SubElement(limit, "lower").text = "-0.08"
+        ET.SubElement(limit, "upper").text = "0.08"
+        ET.SubElement(model.find("plugin"), "footplate_only").text = "true"
     # The common ankle pivot is 0.6477 m above the Gazebo floor
     # (riser_bringup/urdf/model/kinematics.yaml).
     return subprocess.run(
         ["ros2", "run", "ros_gz_sim", "create", "-world", "riser_world",
-         "-name", "riser_participant", "-z", "0.6477", "-P", str(pitch),
+         "-name", "riser_participant", "-z", "0.6477", "-P",
+         str(0.0 if args.footplate_only else pitch),
          "-string", ET.tostring(sdf, encoding="unicode")],
         check=False,
     ).returncode

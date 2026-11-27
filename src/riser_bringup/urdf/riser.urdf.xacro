@@ -9,6 +9,7 @@
   <xacro:arg name="geometry_file" default="$(find riser_bringup)/urdf/model/geometry.yaml" />
   <xacro:arg name="controllers_file" default="$(find riser_bringup)/config/controllers.yaml" />
   <xacro:arg name="command_mode" default="position" />
+  <xacro:arg name="enabled_axes" default="top,torso,hip,bottom" />
   <xacro:arg
       name="control_coordinates_file"
       default="$(find riser_bringup)/config/control_coordinates.json" />
@@ -17,8 +18,14 @@
   <xacro:property name="k" value="${xacro.load_yaml('$(arg kinematics_file)')}" />
   <xacro:property name="gazebo_backend" value="${'$(arg backend)' == 'gazebo'}" />
   <xacro:property name="gazebo_travel_time_s" value="1.0" />
+  <xacro:property name="axis_lower" value="${dict((name, k['joints'][name]['lower']) for name in k['joints'])}" />
+  <xacro:property name="axis_upper" value="${dict((name, k['joints'][name]['upper']) for name in k['joints'])}" />
+  <xacro:if value="${gazebo_backend}">
+    <xacro:property name="axis_lower" value="${dict(dict((name, k['joints'][name]['lower']) for name in k['joints']), foot_pitch=k['gazebo_foot_travel']['lower_pitch_rad'], bottom_actuator=-k['gazebo_foot_travel']['stroke_limit_m'])}" />
+    <xacro:property name="axis_upper" value="${dict(dict((name, k['joints'][name]['upper']) for name in k['joints']), foot_pitch=k['gazebo_foot_travel']['upper_pitch_rad'], bottom_actuator=k['gazebo_foot_travel']['stroke_limit_m'])}" />
+  </xacro:if>
   <xacro:property name="model_velocity"
-      value="${dict((name, (k['joints'][name]['upper'] - k['joints'][name]['lower']) / gazebo_travel_time_s if gazebo_backend else k['joints'][name]['velocity']) for name in k['joints'])}" />
+      value="${dict((name, (axis_upper[name] - axis_lower[name]) / gazebo_travel_time_s if gazebo_backend else k['joints'][name]['velocity']) for name in k['joints'])}" />
   <xacro:property name="d" value="${xacro.load_yaml('$(arg dynamics_file)')}" />
   <xacro:property name="g" value="${xacro.load_yaml('$(arg geometry_file)')}" />
   <xacro:property
@@ -31,8 +38,7 @@
   <xacro:include filename="$(find riser_bringup)/urdf/backends.xacro" />
 
   <xacro:macro name="physical_joint_limit" params="axis effort">
-    <xacro:property name="joint" value="${k['joints'][axis]}" />
-    <limit lower="${joint['lower']}" upper="${joint['upper']}" effort="${effort}"
+    <limit lower="${axis_lower[axis]}" upper="${axis_upper[axis]}" effort="${effort}"
         velocity="${model_velocity[axis]}" />
   </xacro:macro>
 
@@ -464,5 +470,6 @@
   <xacro:riser_backend
       backend="$(arg backend)"
       controllers_file="$(arg controllers_file)"
-      command_mode="$(arg command_mode)" />
+      command_mode="$(arg command_mode)"
+      enabled_axes="$(arg enabled_axes)" />
 </robot>
