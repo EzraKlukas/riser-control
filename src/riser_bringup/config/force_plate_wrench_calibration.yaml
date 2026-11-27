@@ -47,9 +47,9 @@ plates:
 # Wrench at O = inverse_sensitivity_si * bridge_signal.
 bridge_calibration:
   output_axes: riser_physical_xyz
-  # Provisional MSA-6 jumper settings in ELM X1, X2, X3 order (Mx, Fz, Fy).
-  # Replace these estimates with the actual settings for each channel.
-  msa6_gain: [3990, 3969, 3968]
+  # LabVIEW RTR_PXI.vi, saved FP object for plate 7206 and MSA-6 serial 7651.
+  # ELM X1, X2, X3 order (Mx, Fz, Fy). Confirm installed serials and jumpers.
+  msa6_gain: [3990.0, 3969.1, 3967.5]
   msa6_excitation_v: [9.982, 9.982, 9.982]
   # Electrical input channels follow the factory order.
   channel_order: [VFx, VFy, VFz, VMx, VMy, VMz]

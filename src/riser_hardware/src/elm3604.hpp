@@ -41,7 +41,7 @@ struct Elm3604 {
       if (!(gains >> gain_times_excitation) ||
           !std::isfinite(gain_times_excitation) || gain_times_excitation <= 0)
         return false;
-      scale = 1.28 / gain_times_excitation; // 0–10 V Extended Range, µV/count.
+      scale = 1.28 / gain_times_excitation; // ±10 V Extended Range, µV/count.
     }
 
     domain = ecrt_master_create_domain(master);
@@ -50,11 +50,12 @@ struct Elm3604 {
         ecrt_slave_config_dc(slave, 0x0700, 1000000, 0, 20000, 0))
       return false;
 
-    // Keep the fixed SM3 maps. Program the electrical mode used by the scale.
+    // Keep the fixed SM3 maps. Read bipolar amplifier outputs with IEPE bias off.
+    constexpr uint16_t bipolar_10v = 97;
     for (unsigned i = 0; i < channel_field.size(); ++i) {
       const uint16_t settings = 0x8000 + 16 * i;
       if (ecrt_slave_config_sdo8(slave, settings, 0x07, 0) ||
-          ecrt_slave_config_sdo16(slave, settings, 0x01, 108) ||
+          ecrt_slave_config_sdo16(slave, settings, 0x01, bipolar_10v) ||
           ecrt_slave_config_sdo16(slave, settings, 0x03, 0) ||
           ecrt_slave_config_sdo16(slave, settings, 0x2e, 0))
         return false;
