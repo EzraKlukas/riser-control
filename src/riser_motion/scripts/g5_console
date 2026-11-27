@@ -35,6 +35,8 @@ class Console(W.QWidget):
         "ramp_s",
         "max_acceleration_m_s2",
         "max_travel_m",
+        "footplate_lower_rad",
+        "footplate_upper_rad",
     )
     labels: ClassVar[dict[str, str]] = {
         "position": "Carriage position (m)",
@@ -477,11 +479,9 @@ class Console(W.QWidget):
         if not path:
             return
         self.previewed = None
-        with Path(path).open("rb") as stream:
-            content = stream.read(256 * 1024 + 1)
-        if not content or len(content) > 256 * 1024:
-            raise ValueError("Select a nonempty motion CSV up to 256 KiB")
-        csv = content.decode("utf-8")
+        csv = Path(path).read_bytes().decode("utf-8")
+        if not csv:
+            raise ValueError("Select a nonempty motion CSV")
         self.motion_shape.setCurrentText("CSV")
         self.pending_preview = (path, csv)
         self.jog(False, preview=self.pending_preview)
@@ -519,6 +519,11 @@ class Console(W.QWidget):
         key = f"{self.axis.currentText()}/{self.command_mode.currentText()}"
         if key not in self.command_interfaces:
             self.budget.setText(f"Unavailable command interface {key}")
+        elif caps and self.axis.currentText() == "foot_plate_pitch":
+            self.budget.setText(
+                f"{caps['footplate_lower_rad']:.4g} to {caps['footplate_upper_rad']:.4g} rad, "
+                f"{caps['max_duration_s']:.4g} s max"
+            )
         elif caps:
             self.budget.setText(
                 f"{caps['max_velocity_m_s']:.4g} {unit}/s, {caps['max_duration_s']:.4g} s, "

@@ -76,13 +76,16 @@ public:
     auto_declare<double>("ramp_s", 1);
     auto_declare<double>("max_travel_m", 0.0);
     auto_declare<double>("max_acceleration_m_s2", 0.0);
+    auto_declare<double>("footplate_lower_rad", -0.18);
+    auto_declare<double>("footplate_upper_rad", 0.18);
     auto_declare<double>("max_period_s", 0.005);
     return controller_interface::CallbackReturn::SUCCESS;
   }
   controller_interface::CallbackReturn
   on_configure(const rclcpp_lifecycle::State &) override {
     joint_ = get_node()->get_parameter("joint").as_string();
-    angular_ = joint_ == "foot_plate_pitch" || joint_ == "backboard_pitch" ||
+    const bool footplate = joint_ == "foot_plate_pitch";
+    angular_ = footplate || joint_ == "backboard_pitch" ||
                joint_ == "ml_angle";
     if (!angular_ && (joint_.size() < 6 || joint_.compare(joint_.size() - 6, 6, "_motor") != 0))
       return controller_interface::CallbackReturn::ERROR;
@@ -116,15 +119,29 @@ public:
     use_acquisition_time_ = !read_time.empty();
     if (use_acquisition_time_)
       state_names_.push_back(read_time);
-    if (position_mode_ && !configure_position_limits())
+    if ((position_mode_ || footplate) && !configure_position_limits())
       return controller_interface::CallbackReturn::ERROR;
+    settings_.position_envelope.reset();
+    if (footplate) {
+      const PositionEnvelope envelope{
+          get_node()->get_parameter("footplate_lower_rad").as_double(),
+          get_node()->get_parameter("footplate_upper_rad").as_double()};
+      if (!(envelope.lower < envelope.upper &&
+            envelope.lower >= lower_position_ && envelope.upper <= upper_position_)) {
+        RCLCPP_ERROR(get_node()->get_logger(),
+                     "Footplate profile bounds must be ordered and within [%g, %g] rad",
+                     lower_position_, upper_position_);
+        return controller_interface::CallbackReturn::ERROR;
+      }
+      settings_.position_envelope = envelope;
+    }
     if (jog_mode_)
       settings_.profile = "ramp"; // A signed jog never reverses mid-request.
     speed_cap_ = get_node()->get_parameter("max_velocity_m_s").as_double();
     duration_cap_ = get_node()->get_parameter("max_duration_s").as_double();
-    if (joint_.empty() || !std::isfinite(speed_cap_) ||
-        !std::isfinite(duration_cap_) || speed_cap_ <= 0 ||
-        duration_cap_ <= 0 || std::abs(settings_.speed) > speed_cap_ ||
+    if (joint_.empty() || !std::isfinite(duration_cap_) || duration_cap_ <= 0 ||
+        (!footplate && (!std::isfinite(speed_cap_) || speed_cap_ <= 0 ||
+                       std::abs(settings_.speed) > speed_cap_)) ||
         settings_.duration > duration_cap_ || !valid(settings_)) {
       RCLCPP_ERROR(get_node()->get_logger(),
                    "Invalid profile, acceleration, timing or travel budget");
@@ -177,14 +194,12 @@ public:
                 if (!input->csv.empty()) {
                   plan.samples = parse_trajectory(input->csv, position_mode_,
                                                    settings_, speed_cap_, duration_cap_);
-                  if (position_mode_) {
-                    const auto [minimum, maximum] = std::minmax_element(
-                        plan.samples.begin(), plan.samples.end(),
-                        [](const auto &a, const auto &b) { return a.value < b.value; });
-                    plan.min_offset = minimum->value;
-                    plan.max_offset = maximum->value;
-                    if (plan.max_offset - plan.min_offset > upper_position_ - lower_position_)
-                      throw std::invalid_argument("Position trajectory is wider than the mechanical envelope");
+                  if (position_mode_ || settings_.position_envelope) {
+                    plan.measure_position_offsets(position_mode_);
+                    const auto envelope = settings_.position_envelope.value_or(
+                        PositionEnvelope{lower_position_, upper_position_});
+                    if (plan.max_offset - plan.min_offset > envelope.upper - envelope.lower)
+                      throw std::invalid_argument("CSV position excursion exceeds the position envelope");
                   }
                 } else if (position_mode_) {
                   throw std::invalid_argument("Position mode requires a position CSV");
@@ -344,11 +359,17 @@ public:
           const auto *plan = trajectory_.readFromRT();
           // A loaded position servo can have steady tracking error. Keep the
           // held setpoint as the origin to avoid stepping the command at Start.
-          if (!position_mode_ ||
-              (hold_position_ + plan->min_offset >= lower_position_ &&
-               hold_position_ + plan->max_offset <= upper_position_))
-            playback_.start(request, now, feedback, speed_cap_ * 0.05,
-                            position_mode_ ? hold_position_ : feedback.position);
+          const double origin = position_mode_ ? hold_position_ : feedback.position;
+          const auto envelope = settings_.position_envelope.value_or(
+              PositionEnvelope{lower_position_, upper_position_});
+          if ((!position_mode_ && !settings_.position_envelope) ||
+              envelope.contains(origin, plan->min_offset, plan->max_offset)) {
+            // Footplate playback still starts from nearly stationary feedback.
+            constexpr double footplate_start_speed_rad_s = 0.0015;
+            const double starting_speed =
+                settings_.position_envelope ? footplate_start_speed_rad_s : speed_cap_ * 0.05;
+            playback_.start(request, now, feedback, starting_speed, origin);
+          }
         }
       }
       if (request.trajectory && playback_.running()) {

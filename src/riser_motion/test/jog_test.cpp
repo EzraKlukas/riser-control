@@ -84,4 +84,22 @@ int main() {
   request.cancel = true;
   if (update(1ms) || jog.running())
     return 6;
+
+  caps.position_envelope = PositionEnvelope{-.18, .18};
+  caps.max_travel = 0.;
+  requested.position_envelope = caps.position_envelope;
+  requested.speed = 1.;
+  if (!jog_limits_error(requested, 0., 60.).empty())
+    return 13;
+  request.cancel = false;
+  for (double rate : {-1., 1.}) {
+    jog.stop();
+    ++request.id;
+    request.velocity = rate;
+    const double limit = rate * .18;
+    update(0ms);
+    if (update(250ms, 0, 0, 10, {limit, 0., 2.}) != 0. ||
+        update(250ms, 0, 0, 10, {-limit, 0., 2.}) != rate)
+      return 14;
+  }
 }

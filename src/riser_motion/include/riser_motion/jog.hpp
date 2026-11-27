@@ -29,7 +29,7 @@ inline std::string jog_stamp_error(std::chrono::nanoseconds age, int64_t stamp,
 inline std::string jog_limits_error(const Settings &s, double speed_cap,
                                     double duration_cap) {
   const char *reason = profile_error(s);
-  if (std::isfinite(s.speed) && std::abs(s.speed) > speed_cap)
+  if (!s.position_envelope && std::isfinite(s.speed) && std::abs(s.speed) > speed_cap)
     reason = "Velocity cap exceeded";
   else if (std::isfinite(s.duration) && s.duration > duration_cap)
     reason = "Duration cap exceeded";
@@ -97,12 +97,14 @@ public:
     const double travelled =
         distance_ + std::abs(sample.position - previous_position_);
     if (!healthy || now - last_heartbeat_ >= HeartbeatTimeout ||
-        elapsed >= active_.duration || travelled >= caps.max_travel ||
+        elapsed >= active_.duration ||
         wall_elapsed > 4 * active_.duration + 2 ||
         (active_.velocity < 0 && negative_limit != 0) ||
         (active_.velocity > 0 && positive_limit != 0) ||
-        std::abs(sample.velocity) >
-            3.0 * std::abs(active_.velocity) + kSpeedToleranceMps) {
+        (!caps.position_envelope &&
+         (travelled >= caps.max_travel ||
+          std::abs(sample.velocity) >
+              3.0 * std::abs(active_.velocity) + kSpeedToleranceMps))) {
       stop();
       return 0;
     }
@@ -113,7 +115,10 @@ public:
     // The requested duration includes both ends of the velocity ramp.
     const double ramp_fraction =
         std::min(elapsed, active_.duration - elapsed) / caps.ramp;
-    return active_.velocity * std::min(1., ramp_fraction);
+    const double rate = active_.velocity * std::min(1., ramp_fraction);
+    return caps.position_envelope
+               ? caps.position_envelope->limit_velocity(sample.position, rate, dt)
+               : rate;
   }
 };
 } // namespace riser_motion

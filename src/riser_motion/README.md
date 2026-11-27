@@ -85,14 +85,34 @@ topics `/controller_manager/introspection_data/{names,values}` provide
   velocities must be zero.
 - Time starts at zero, increases strictly and is in seconds. The first value
   is zero in both formats. Use metres and m/s for carriages, radians and
-  rad/s for angles. The validator checks finite samples, duration, speed,
-  acceleration and travel. The live controller checks feedback, direction,
+  rad/s for angles. The validator checks finite samples, duration and the
+  selected axis's motion bounds. The live controller checks feedback, direction,
   timing and heartbeat. Position cancellation holds the measured position
   when feedback is healthy. Velocity cancellation requests zero.
+- Include a timestamp on every row, even at a fixed sample rate. The default
+  duration cap is 60 s, or 60,001 rows at 1 ms intervals including both
+  endpoints. The GUI and controller accept the complete CSV without an
+  application-level file-size cap.
 - [Rejected example](config/motion_rejected.csv) repeats a timestamp. The
   same controller validates preview and execution. The GUI sends the exact
   previewed CSV content to the execution host again at **Start**. Motion
   CSVs are separate from [ankle-wrench perturbation CSVs](../riser_bringup/config/perturbation-tutorial.md).
+
+Footplate profiles use an absolute **−0.18 to +0.18 rad** envelope about the
+calibrated zero. Velocity CSV validation integrates signed velocity to estimate
+the angle excursion. At **Start**, the controller checks that the entire
+excursion fits from the current angle, or from the held setpoint in position
+mode. Velocity playback and jogs limit outward commands using measured pitch.
+The footplate profiles use this angle envelope in place of profile speed,
+acceleration and cumulative travel caps. The backend still applies its own
+actuator limits and hard switches.
+
+Edit `footplate_lower_rad`, `footplate_upper_rad`, and `max_duration_s` under
+`motor_profile.ros__parameters` in [controllers.yaml](config/controllers.yaml).
+Restart with that file using `g5_controllers_file:=/path/to/controllers.yaml`
+on `control.launch.py`, or `controllers_file:=/path/to/controllers.yaml` on
+`bottom_motor.launch.py`. Footplate bounds must stay within the robot's
+mechanical envelope.
 
 The Gazebo-only check exercises the failure cases as well as motion. Run it
 against a fresh isolated launch on the same local ROS domain:

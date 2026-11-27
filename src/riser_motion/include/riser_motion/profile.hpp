@@ -1,15 +1,32 @@
 #pragma once
+#include <algorithm>
 #include <cmath>
 #include <optional>
 #include <string>
 namespace riser_motion {
 constexpr double kSpeedToleranceMps = 0.000016; // approximately 0.01 shaft rad/s
 
+struct PositionEnvelope {
+  double lower, upper;
+
+  bool contains(double origin, double min_offset, double max_offset) const {
+    return origin + min_offset >= lower && origin + max_offset <= upper;
+  }
+
+  double limit_velocity(double position, double rate, double dt) const {
+    const double lower_rate = std::min(0., (lower - position) / dt);
+    const double upper_rate = std::max(0., (upper - position) / dt);
+    return std::clamp(rate, lower_rate, upper_rate);
+  }
+};
+
 struct Settings {
   std::string profile = "ramp";
   double speed = 0, duration = 0, ramp = 0, max_travel = 0,
          max_acceleration = 0;
   double max_period = 0.005;
+  // Footplate profiles use calibrated position instead of the cumulative travel budget.
+  std::optional<PositionEnvelope> position_envelope = std::nullopt;
 };
 inline const char *profile_error(const Settings &s) {
   if (s.profile != "ramp" && s.profile != "sine" && s.profile != "triangle")
@@ -22,6 +39,8 @@ inline const char *profile_error(const Settings &s) {
     return "Duration must allow two ramps of positive length";
   if (!std::isfinite(s.max_period) || s.max_period <= 0 || s.max_period >= s.ramp)
     return "Maximum control period must be positive and shorter than the ramp";
+  if (s.position_envelope)
+    return nullptr;
   const double acceleration =
       s.profile == "sine" ? std::abs(s.speed) * 6.283185307179586 / s.duration
       : s.profile == "triangle" ? 2 * std::abs(s.speed) / s.duration

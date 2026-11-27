@@ -15,8 +15,6 @@ struct Waypoint {
 inline std::vector<Waypoint> parse_trajectory(
     const std::string &csv, bool position, const Settings &limits,
     double speed_cap, double duration_cap) {
-  if (csv.size() > 256 * 1024)
-    throw std::invalid_argument("Motion CSV exceeds 256 KiB");
   std::istringstream input(csv);
   input.imbue(std::locale::classic());
   std::string line;
@@ -41,7 +39,7 @@ inline std::vector<Waypoint> parse_trajectory(
         !std::isfinite(next.value) || next.time > duration_cap)
       throw std::invalid_argument("Invalid or out-of-budget CSV row " +
                                   std::to_string(samples.size() + 2));
-    if (!position && std::abs(next.value) > speed_cap)
+    if (!limits.position_envelope && !position && std::abs(next.value) > speed_cap)
       throw std::invalid_argument("CSV velocity cap exceeded");
     if (samples.empty()) {
       if (next.time != 0 || next.value != 0)
@@ -52,19 +50,21 @@ inline std::vector<Waypoint> parse_trajectory(
       const double change = next.value - previous.value;
       if (!(dt > 0))
         throw std::invalid_argument("CSV time must increase strictly");
-      const double rate = change / dt;
-      if (position) {
-        if (1.5 * std::abs(rate) > speed_cap ||
-            6 * std::abs(rate) / dt > limits.max_acceleration)
-          throw std::invalid_argument("CSV position segment speed or acceleration exceeds cap");
-        distance += std::abs(change);
-      } else {
-        if (std::abs(rate) > limits.max_acceleration)
-          throw std::invalid_argument("CSV acceleration cap exceeded");
-        distance += (std::abs(previous.value) + std::abs(next.value)) * dt / 2;
+      if (!limits.position_envelope) {
+        const double rate = change / dt;
+        if (position) {
+          if (1.5 * std::abs(rate) > speed_cap ||
+              6 * std::abs(rate) / dt > limits.max_acceleration)
+            throw std::invalid_argument("CSV position segment speed or acceleration exceeds cap");
+          distance += std::abs(change);
+        } else {
+          if (std::abs(rate) > limits.max_acceleration)
+            throw std::invalid_argument("CSV acceleration cap exceeded");
+          distance += (std::abs(previous.value) + std::abs(next.value)) * dt / 2;
+        }
+        if (distance >= limits.max_travel)
+          throw std::invalid_argument("CSV travel cap exceeded");
       }
-      if (distance >= limits.max_travel)
-        throw std::invalid_argument("CSV travel cap exceeded");
     }
     samples.push_back(next);
   }
@@ -77,6 +77,33 @@ struct Trajectory {
   Settings settings;
   std::vector<Waypoint> samples;
   double min_offset = 0, max_offset = 0;
+
+  void measure_position_offsets(bool position) {
+    min_offset = max_offset = 0.;
+    const auto include = [&](double offset) {
+      if (!std::isfinite(offset))
+        throw std::invalid_argument("CSV position offset is nonfinite");
+      min_offset = std::min(min_offset, offset);
+      max_offset = std::max(max_offset, offset);
+    };
+    double offset = 0.;
+    for (std::size_t i = 1; i < samples.size(); ++i) {
+      const auto &first = samples[i - 1];
+      const auto &last = samples[i];
+      if (position) {
+        include(last.value);
+        continue;
+      }
+      const double dt = last.time - first.time;
+      if (first.value != 0. && std::signbit(first.value) != std::signbit(last.value)) {
+        // A linear velocity segment has a position extremum at zero velocity.
+        const double zero_dt = dt / (1. + std::abs(last.value / first.value));
+        include(offset + (0.5 * first.value) * zero_dt);
+      }
+      offset += (0.5 * first.value + 0.5 * last.value) * dt;
+      include(offset);
+    }
+  }
 
   double duration() const {
     return samples.empty() ? settings.duration : samples.back().time;
@@ -96,7 +123,7 @@ struct Trajectory {
     double fraction = (time - start.time) / (end->time - start.time);
     if (position)
       fraction *= fraction * (3 - 2 * fraction); // Zero rate at each knot.
-    return start.value + (end->value - start.value) * fraction;
+    return (1. - fraction) * start.value + fraction * end->value;
   }
 };
 
@@ -136,8 +163,10 @@ public:
     previous_ = sample.position;
     if (sample.ready != 2 || !std::isfinite(sample.position) ||
         !std::isfinite(sample.velocity) || !(dt > 0) ||
-        dt > plan.settings.max_period || distance_ >= plan.settings.max_travel ||
-        std::abs(sample.velocity) > speed_cap * 1.5 ||
+        dt > plan.settings.max_period ||
+        (!plan.settings.position_envelope &&
+         (distance_ >= plan.settings.max_travel ||
+          std::abs(sample.velocity) > speed_cap * 1.5)) ||
         now - last_heartbeat_ >= std::chrono::milliseconds(600) ||
         now - started_ > std::chrono::duration<double>(
             simulation_time ? 4 * plan.duration() + 2 : plan.duration() + 1)) {
@@ -145,12 +174,14 @@ public:
       return std::nullopt;
     }
     const double value = plan.value(elapsed_, position);
-    const double target = position ? origin_ + value : value;
+    double target = position ? origin_ + value : value;
     const double direction = position ? target - sample.position : target;
     if ((direction > 0 && forward != 0) || (direction < 0 && reverse != 0)) {
       stop();
       return std::nullopt;
     }
+    if (!position && plan.settings.position_envelope)
+      target = plan.settings.position_envelope->limit_velocity(sample.position, target, dt);
     if (elapsed_ >= plan.duration())
       stop();
     elapsed_ += dt;

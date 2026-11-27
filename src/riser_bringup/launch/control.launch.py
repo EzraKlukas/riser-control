@@ -77,7 +77,7 @@ def setup(context):
         config = yaml.safe_load(Path(controllers).read_text())
     if motion:
         motion_config = yaml.safe_load(
-            (Path(get_package_share_directory("riser_motion")) / "config/controllers.yaml").read_text()
+            Path(LaunchConfiguration("g5_controllers_file").perform(context)).read_text()
         )
         manager = config["controller_manager"]["ros__parameters"]
         manager["calibration_controller"] = {"type": "riser_calibration/CalibrationController"}
@@ -115,11 +115,13 @@ def setup(context):
                 name = profile if mode_name == "velocity" else profile.replace("_profile", "_position_profile")
                 manager[name] = deepcopy(types["motor_profile"])
                 config[name] = deepcopy(motion_config["motor_profile"])
-                config[name]["ros__parameters"].update(
-                    joint=joint, command_mode=mode_name, max_velocity_m_s=.03,
-                    max_travel_m=.05, max_acceleration_m_s2=.12,
+                params = config[name]["ros__parameters"]
+                params.update(
+                    joint=joint, command_mode=mode_name,
                     read_time_interface="RiserSystem/read_time",
                 )
+                if joint != "foot_plate_pitch":
+                    params.update(max_velocity_m_s=.03, max_travel_m=.05, max_acceleration_m_s2=.12)
                 inactive.append(name)
     if masked:
         for name in ("riser_position_controller", "riser_velocity_controller",
@@ -298,6 +300,7 @@ def generate_launch_description():
                     Path(get_package_share_directory("riser_motion"))
                     / "config/controllers.yaml"
                 ),
+                description="Motion profile configuration for Gazebo and EtherCAT.",
             ),
             DeclareLaunchArgument(
                 "controllers_file",

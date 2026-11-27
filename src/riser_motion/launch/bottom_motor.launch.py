@@ -210,9 +210,6 @@ def setup(context):
                 joint="foot_plate_pitch",
                 jog_mode=True,
                 command_mode=mode,
-                max_velocity_m_s=float(pitch["velocity"]),
-                max_travel_m=0.08,
-                max_acceleration_m_s2=0.08,
             )
     wrench_enabled = LaunchConfiguration("force_plates").perform(context) == "true"
     if wrench_enabled:
